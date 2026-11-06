@@ -9,6 +9,7 @@ your real library are never touched. Needs ffmpeg/ffprobe (PATH or C:\ffmpeg\bin
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -22,7 +23,7 @@ TESTS = Path(__file__).resolve().parent
 ROOT = TESTS.parent
 PORT = int(os.environ.get("GV_TEST_PORT", "8099"))
 # each suite imports core_checks first, so core runs on every fresh library
-SUITES = ["library_checks.py", "release_checks.py"]
+SUITES = [s for s in ["library_checks.py", "release_checks.py", "watch_checks.py"] if not os.environ.get("GV_ONLY") or s == os.environ["GV_ONLY"]]
 
 
 def _healthy() -> bool:
@@ -44,8 +45,19 @@ def _stop(proc: subprocess.Popen) -> None:
 
 def run_suite(name: str, media: Path, work: Path, env_base: dict) -> bool:
     lib = Path(tempfile.mkdtemp(prefix="lib-", dir=work))
-    env = dict(env_base, GENVAULT_ROOT=str(lib), GENVAULT_PORT=str(PORT), GV_TEST_LIB=str(lib),
-               GV_TEST_PORT=str(PORT), GV_TEST_WORK=str(work / name.removesuffix(".py")))
+    # every suite gets its own config with one watch folder; it already holds
+    # two "old" files (the backlog, which must not be imported on its own)
+    watch = Path(tempfile.mkdtemp(prefix="watch-", dir=work))
+    (watch / "old").mkdir()
+    for f in ("test image 1.png", "test image 2.png"):
+        shutil.copy2(media / f, watch / "old" / f)
+    cfg = work / f"config-{name}.json"
+    cfg.write_text(json.dumps({"library_root": str(lib), "port": PORT,
+                               "watch_folders": [{"path": str(watch), "skip_companion_png": True}]}),
+                   encoding="utf-8")
+    env = dict(env_base, GENVAULT_CONFIG=str(cfg), GENVAULT_ROOT=str(lib), GENVAULT_PORT=str(PORT),
+               GV_TEST_LIB=str(lib), GV_TEST_PORT=str(PORT), GV_TEST_WATCH=str(watch),
+               GV_TEST_MEDIA=str(media), GV_TEST_WORK=str(work / name.removesuffix(".py")))
     log = open(work / f"server-{name}.log", "w", encoding="utf-8")
     server = subprocess.Popen([sys.executable, "serve.py"], cwd=ROOT, env=env,
                               stdout=log, stderr=subprocess.STDOUT)

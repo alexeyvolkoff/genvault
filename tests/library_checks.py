@@ -92,6 +92,45 @@ st, r, _ = req("POST", "/api/assets/bulk/purge", {"ids": [three[0]]})
 check("purge of a non-trashed file is refused per file", st == 200 and not r["done"] and r["errors"], r)
 check("unknown bulk action -> 404", req("POST", "/api/assets/bulk/explode", {"ids": [1]})[0] == 404)
 
+# ---- sub-projects (2.5.0) ---------------------------------------------------------
+la = lib_assets()
+s1 = [a for a in la if a["sub_project"] == "S1"]
+st, r, _ = req("POST", "/api/projects/rename-sub", {"project": "Test Project", "old": "S1", "new": "S2"})
+la = lib_assets()
+s2 = [a for a in la if a["sub_project"] == "S2"]
+check("rename sub-project", st == 200 and not r["errors"] and len(s2) == len(s1) > 0, (st, r))
+check("files moved into the new sub-project folder", all(a["rel_path"].startswith("library/Test Project/S2/") for a in s2))
+check("DB matches disk after sub-project rename", files_on_disk_match(la))
+check("old sub-project folder removed", not (LIB / "library/Test Project/S1").exists())
+st, r, _ = req("POST", "/api/projects/rename-sub", {"project": "Test Project", "old": "S2", "new": "s2"})
+real = {p.name for p in (LIB / "library/Test Project").iterdir()}
+check("case-only sub-project rename", st == 200 and not r["errors"] and "s2" in real and "S2" not in real, (st, r, real))
+check("DB matches disk after case-only sub rename", files_on_disk_match(lib_assets()))
+check("rename unknown sub-project -> 404",
+      req("POST", "/api/projects/rename-sub", {"project": "Test Project", "old": "nope", "new": "x"})[0] == 404)
+st, r, _ = req("POST", "/api/projects/rename-sub", {"project": "Test Project", "old": "s2", "new": "Sub B"})
+check("merge sub-project into an existing one", st == 200 and not r["errors"]
+      and {a["sub_project"] for a in lib_assets()} == {"Sub B"}, (st, r))
+
+one = lib_assets()[0]
+st, r, _ = req("POST", "/api/assets/move-bulk", {"ids": [one["id"]], "clear_sub_project": True})
+moved = r["moved"][0] if st == 200 and r["moved"] else {}
+check("move out of the sub-project", moved.get("sub_project") is None
+      and moved.get("rel_path", "").startswith(f"library/Test Project/{one['kind']}/"), (st, r))
+check("file on disk after clearing the sub-project", (LIB / moved.get("rel_path", "x")).exists())
+_, d, _ = req("GET", "/api/assets?status=library&project=Test%20Project&sub_project=__none__")
+check("filter: files without sub-project", [a["id"] for a in d["assets"]] == [one["id"]], [a["id"] for a in d["assets"]])
+
+# ---- empty trash -------------------------------------------------------------------
+victims = [a["id"] for a in lib_assets()[:2]]
+req("POST", "/api/assets/bulk/trash", {"ids": victims})
+_, tr, _ = req("GET", "/api/assets?status=trash")
+paths = [LIB / a["rel_path"] for a in tr["assets"]]
+st, r, _ = req("POST", "/api/trash/empty")
+_, tr2, _ = req("GET", "/api/assets?status=trash")
+check("empty trash", st == 200 and len(r["done"]) == len(paths) >= 2 and not r["errors"] and r["freed_bytes"] > 0, r)
+check("trash is empty, files gone", not tr2["assets"] and not any(p.exists() for p in paths))
+
 failed = [n for n, ok in results if not ok]
 print(f"\nfeatures: {len(results) - len(failed)}/{len(results)} passed")
 sys.exit(1 if failed or REGRESSION_FAILED else 0)

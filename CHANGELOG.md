@@ -1,5 +1,55 @@
 # Changelog
 
+## 2.5.0 — 2026-11-06
+
+- **Watch folders (optional).** List extra folders in `config.json` under
+  `watch_folders` — e.g. your ComfyUI output folder — and genvault watches them
+  like `drop\`: every new render is **moved** into the Inbox once it is
+  completely written (no copies, so nothing is duplicated and the folder empties
+  itself). The folder structure is left alone; the subfolder a file came from
+  is shown on its Inbox card.
+  - **Older files stay where they are.** Files that were already in the folder
+    when you added it are counted as *backlog*. The Inbox shows a banner with
+    their number and size and an **Import all** button (with progress and
+    **Stop**), or you can **Ignore** them.
+  - **Video Combine's first-frame PNGs are skipped** (`skip_companion_png`,
+    on by default): a PNG with the same name as a video next to it stays in the
+    folder instead of being imported.
+  - A folder that is inside the library (or contains it) is refused, and a
+    missing folder is reported in the Inbox.
+  - Side effect: ComfyUI's own history/queue previews can no longer show files
+    after genvault has moved them.
+- **Review mode in the Inbox.** **▶ Review** shows the Inbox files one by one,
+  full screen with the prompt and parameters next to them. **Enter** keeps a
+  file, **Del** moves it to the Trash, **← / →** go back / skip ahead without
+  deciding, **Z** undoes, **F** / **1–5** favorite and rate, **M** toggles the
+  sound. The next files are
+  preloaded. At the end a summary shows what was kept and trashed, and **Enter**
+  selects the kept files so you can file them in one go. Works on the current
+  Inbox filter (e.g. videos only).
+- **Full-screen player.** **▶ Play** in the Library plays what you see — the
+  current filter, search and sort, or only the selected cards — full screen.
+  Videos play through and images stay 5 seconds, then the next file starts;
+  after the last one it starts over. **← / →** previous / next, **Space** pause
+  (or click the picture), **A** loop the current file, **M** sound, **V** videos
+  only, **I** info (name, project, prompt), **F** / **1–5** favorite and rate,
+  **Esc** exit. Small icons in the top right corner show whether loop, sound
+  and videos-only are on; these settings are remembered. There is no delete key
+  in the player on purpose.
+- **Empty trash** button in the Trash view (shows the number of files and asks
+  before deleting them forever).
+- **Project tree in the sidebar.** Projects can be expanded to show their
+  sub-projects (and "(directly in …)" for files that are in no sub-project).
+  Click a row to filter. **Drag cards onto a row to move them there** — the
+  selected cards, or just the dragged one; dropping on a project moves the
+  files directly into it. The kind stays the same.
+- **Rename sub-projects** with the ✎ pencil in the tree, like projects
+  (renaming onto an existing sub-project merges both; trashed files follow).
+- **Bulk move:** the new **none** option moves files *out of* their
+  sub-project, directly into the project (empty fields still mean "keep").
+- **Selecting:** Shift+click a checkbox to select a whole range. While files
+  are selected, the checkboxes stay visible on all cards.
+
 ## 2.4.2 — 2026-10-31
 
 - **Fix: "Preview failed: unsupported operand type(s) for \*: 'NoneType' and

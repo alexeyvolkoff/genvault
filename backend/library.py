@@ -255,12 +255,43 @@ def update_asset(asset_id: int, patch: dict) -> dict:
 # ---- project rename ------------------------------------------------------------
 
 
+def _swap_prefix(rel: str | None, old_prefix: str, new_prefix: str) -> str | None:
+    """Replace a leading folder prefix of a stored path (case-insensitive,
+    like the Windows file system)."""
+    if rel and rel.lower().startswith(old_prefix.lower()):
+        return new_prefix + rel[len(old_prefix):]
+    return rel
+
+
 def _swap_project_prefix(rel: str | None, old: str, new: str) -> str | None:
     """library/<old>/... -> library/<new>/... (folder names as safe_segment)."""
-    prefix = f"library/{safe_segment(old)}/"
-    if rel and rel.lower().startswith(prefix.lower()):
-        return f"library/{safe_segment(new)}/" + rel[len(prefix):]
-    return rel
+    return _swap_prefix(rel, f"library/{safe_segment(old)}/", f"library/{safe_segment(new)}/")
+
+
+def _case_only_dir_rename(old_dir: Path, new_dir: Path) -> bool:
+    """"alpha" -> "Alpha": on Windows both paths are the same folder, so moving
+    files would keep the old spelling. Rename the folder itself via a temp
+    name. Returns True when done (the caller then only rewrites stored paths)."""
+    # (compare as strings: WindowsPath equality ignores case)
+    if not (str(old_dir) != str(new_dir) and str(old_dir).lower() == str(new_dir).lower()
+            and old_dir.exists()):
+        return False
+    tmp = old_dir.with_name(old_dir.name + ".gv-rename")
+    try:
+        os.rename(old_dir, tmp)
+        os.rename(tmp, new_dir)
+        return True
+    except OSError:
+        if tmp.exists() and not old_dir.exists():
+            os.rename(tmp, old_dir)        # put it back, fall back to per-file moves
+        return False
+
+
+def _prune_tree(d: Path) -> None:
+    if d.exists():
+        for sub in sorted((p for p in d.rglob("*") if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
+            _prune_empty_dirs(sub)
+        _prune_empty_dirs(d)
 
 
 def rename_project(old: str, new: str) -> dict:
@@ -279,20 +310,7 @@ def rename_project(old: str, new: str) -> dict:
 
     old_dir = config.LIBRARY_DIR / safe_segment(old)
     new_dir = config.LIBRARY_DIR / safe_segment(new)
-    # Case-only rename ("alpha" -> "Alpha"): on Windows both paths are the same
-    # folder, so moving files would keep the old spelling. Rename the folder
-    # itself (via a temp name) and just rewrite the stored paths.
-    dir_renamed = False
-    # (compare as strings: WindowsPath equality ignores case)
-    if str(old_dir) != str(new_dir) and str(old_dir).lower() == str(new_dir).lower() and old_dir.exists():
-        tmp = old_dir.with_name(old_dir.name + ".gv-rename")
-        try:
-            os.rename(old_dir, tmp)
-            os.rename(tmp, new_dir)
-            dir_renamed = True
-        except OSError:
-            if tmp.exists() and not old_dir.exists():
-                os.rename(tmp, old_dir)        # put it back, fall through to per-file moves
+    dir_renamed = _case_only_dir_rename(old_dir, new_dir)
 
     renamed, errors = [], []
     for a in assets:
@@ -311,10 +329,50 @@ def rename_project(old: str, new: str) -> dict:
             renamed.append(_saved(a["id"]))
         except Exception as e:
             errors.append({"id": a["id"], "name": a.get("original_name"), "error": str(e)})
-    if old_dir.exists() and not dir_renamed:
-        for d in sorted((p for p in old_dir.rglob("*") if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
-            _prune_empty_dirs(d)
-        _prune_empty_dirs(old_dir)
+    if not dir_renamed:
+        _prune_tree(old_dir)
+    return {"renamed": renamed, "errors": errors}
+
+
+def rename_sub_project(project: str, old: str, new: str) -> dict:
+    """Rename a sub-project of one project — same rules as rename_project:
+    files move into the new folder, trashed files are restored into it,
+    renaming onto an existing sub-project merges both."""
+    project = str(project or "").strip()
+    old, new = str(old or "").strip(), str(new or "").strip()
+    if not project or not old or not new:
+        raise ValueError("project, old and new sub-project name are required")
+    if old == new:
+        raise ValueError("the new name is the same as the old one")
+    assets = [a for a in db.all_assets() if a.get("project") == project and a.get("sub_project") == old]
+    if not assets:
+        raise LookupError(f'sub-project "{old}" not found in "{project}"')
+
+    proj_dir = config.LIBRARY_DIR / safe_segment(project)
+    old_dir, new_dir = proj_dir / safe_segment(old), proj_dir / safe_segment(new)
+    old_prefix = f"library/{safe_segment(project)}/{safe_segment(old)}/"
+    new_prefix = f"library/{safe_segment(project)}/{safe_segment(new)}/"
+    dir_renamed = _case_only_dir_rename(old_dir, new_dir)
+
+    renamed, errors = [], []
+    for a in assets:
+        try:
+            if a["status"] == "library" and not dir_renamed:
+                renamed.append(update_asset(a["id"], {"sub_project": new}))
+                continue
+            fields = {"sub_project": new, "updated_at": now()}
+            if a["status"] == "library":
+                fields["rel_path"] = _swap_prefix(a.get("rel_path"), old_prefix, new_prefix)
+            elif a["status"] == "trash" and a.get("trash_info"):
+                info = dict(a["trash_info"])
+                info["orig_rel_path"] = _swap_prefix(info.get("orig_rel_path"), old_prefix, new_prefix)
+                fields["trash_info"] = info
+            db.update(a["id"], fields)
+            renamed.append(_saved(a["id"]))
+        except Exception as e:
+            errors.append({"id": a["id"], "name": a.get("original_name"), "error": str(e)})
+    if not dir_renamed:
+        _prune_tree(old_dir)
     return {"renamed": renamed, "errors": errors}
 
 
@@ -375,6 +433,22 @@ def purge_asset(asset_id: int) -> None:
     if sc.exists():
         sc.unlink()
     db.delete(asset_id)
+
+
+def empty_trash() -> dict:
+    """Permanently delete everything in the trash. Per-file errors (e.g. a
+    file still open in another program) are collected, those files stay."""
+    done, errors, freed = [], [], 0
+    for a in db.all_assets("trash"):
+        try:
+            p = abs_path(a)
+            size = p.stat().st_size if p.exists() else 0
+            purge_asset(a["id"])
+            done.append(a["id"])
+            freed += size
+        except Exception as e:
+            errors.append({"id": a["id"], "name": a.get("original_name"), "error": str(e)})
+    return {"done": done, "errors": errors, "freed_bytes": freed}
 
 
 # ---- explorer ----------------------------------------------------------------

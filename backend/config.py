@@ -16,7 +16,7 @@ PROJECT_DIR = APP_DIR.parent                   # app root (program folder)
 CONFIG_FILE = Path(os.environ.get("GENVAULT_CONFIG", str(PROJECT_DIR / "config.json")))
 
 # App version. Bump on every release and add a CHANGELOG.md entry.
-APP_VERSION = "2.4.2"
+APP_VERSION = "2.5.0"
 
 DEFAULTS = {
     "library_root": str(Path.home() / "genvault"),
@@ -25,6 +25,9 @@ DEFAULTS = {
     "kinds": ["clip", "image", "sound", "release", "pre-release", "recipe"],
     "ffmpeg": "",   # autodetected when empty
     "ffprobe": "",
+    # extra folders watched like drop\ (e.g. the ComfyUI output folder):
+    # a path string, or {"path": ..., "skip_companion_png": true}
+    "watch_folders": [],
 }
 
 
@@ -57,6 +60,23 @@ DB_PATH = LIBRARY_ROOT / "genvault.db"
 PORT = int(_cfg["port"])
 PLATFORMS = [str(p) for p in _cfg["platforms"]]
 KINDS = [str(k) for k in _cfg["kinds"]]
+
+
+def _watch_folders(raw) -> list[dict]:
+    out = []
+    for entry in raw if isinstance(raw, list) else []:
+        if isinstance(entry, str):
+            entry = {"path": entry}
+        if not isinstance(entry, dict) or not str(entry.get("path") or "").strip():
+            continue
+        out.append({
+            "path": Path(os.path.expandvars(os.path.expanduser(str(entry["path"]).strip()))),
+            "skip_companion_png": bool(entry.get("skip_companion_png", True)),
+        })
+    return out
+
+
+WATCH_FOLDERS = _watch_folders(_cfg.get("watch_folders"))
 
 VIDEO_EXTS = {".mp4", ".webm", ".mov", ".mkv", ".gif", ".avi", ".m4v"}
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".tif"}

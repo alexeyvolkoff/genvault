@@ -4,5 +4,6 @@
   "platforms": ["X", "Civitai", "Reddit"],
   "kinds": ["clip", "image", "sound", "release", "pre-release", "recipe"],
   "ffmpeg": "",
-  "ffprobe": ""
+  "ffprobe": "",
+  "watch_folders": []
 }

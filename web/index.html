@@ -24,6 +24,9 @@
   /* rename pencil next to sidebar facets: only visible on hover/focus */
   .gv-facet-edit { opacity: 0; }
   .gv-facet-row:hover .gv-facet-edit, .gv-facet-edit:focus { opacity: 1; }
+  /* project tree: drop targets while library cards are dragged */
+  body.gv-dragging .gv-drop-row { outline: 1px dashed #3f3f46; }
+  .gv-drop-row.gv-drop-over { outline: 2px solid #6366f1 !important; background: rgba(99,102,241,.18); }
   input, textarea, select { outline: none; }
   input:focus, textarea:focus, select:focus { border-color: #6366f1 !important; }
 </style>

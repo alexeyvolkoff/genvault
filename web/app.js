@@ -100,8 +100,13 @@ const state = {
     audio: "keep",                 // keep | silent (replace sound with a silent track)
     check: null, wmInfo: null, previewUrl: null,
   },
-  bulkLib: { project: "", sub_project: "", kind: "" },   // library bulk move
+  bulkLib: { project: "", sub_project: "", kind: "", clearSub: false },   // library bulk move
+  treeOpen: new Set(JSON.parse(localStorage.getItem("gv-tree-open") || "[]")),  // expanded projects
+  watch: [],                       // watch-folder status (Inbox banner)
+  review: null,                    // inbox review mode, see openReview()
+  lastSelectId: null,              // anchor for shift+click range selection
 };
+const NO_SUB = "__none__";         // sub_project filter: files directly in the project
 
 const assetById = (id) => state.assets.find((a) => a.id === Number(id));
 
@@ -215,6 +220,7 @@ async function refresh() {
     const [data, values] = await Promise.all([
       api("/api/assets?" + buildQuery()),
       api("/api/values"),
+      state.view === "inbox" ? loadWatch() : null,
     ]);
     // carry over unsaved inbox edits so filing one item doesn't reset the rest
     const prev = new Map(state.assets.map((a) => [a.id, a]));
@@ -343,7 +349,7 @@ function mediaIcon(t) { return t === "video" ? "🎬" : t === "image" ? "🖼️
 
 function thumbHtml(a, aspect = "aspect-video") {
   const inner = a.thumb_url
-    ? `<img src="${esc(a.thumb_url)}" loading="lazy" class="absolute inset-0 w-full h-full object-cover">`
+    ? `<img src="${esc(a.thumb_url)}" loading="lazy" draggable="false" class="absolute inset-0 w-full h-full object-cover">`
     : `<div class="absolute inset-0 flex items-center justify-center text-4xl opacity-40">${mediaIcon(a.media_type)}</div>`;
   const dur = (a.meta && a.meta.duration)
     ? `<span class="absolute bottom-1 right-1 text-[10px] px-1 py-0.5 rounded bg-black/70 text-zinc-200">${fmtDur(a.meta.duration)}</span>` : "";
@@ -383,13 +389,54 @@ function facetSection(title, items, facetKey, activeVal, renameAction = null) {
   </div>`;
 }
 
+/* Project tree (2.5.0): projects with their sub-projects as a second level.
+   Click = filter, ✎ = rename, drop selected cards on a row = move them there. */
+function projectTreeHtml() {
+  const f = state.facets, fl = state.filters;
+  const projects = f.projects || [];
+  if (!projects.length) return "";
+  const collapsed = state.collapsed.has("project");
+  const rowCls = (active) => `w-full min-w-0 flex justify-between items-center gap-2 text-left px-2 py-1 rounded text-sm ${active ? "bg-indigo-600 text-white" : "hover:bg-zinc-800 text-zinc-300"}`;
+  const cnt = (n, active) => `<span class="text-xs ${active ? "text-indigo-200" : "text-zinc-500"}">${n}</span>`;
+  const pencil = (attrs) => `<button ${attrs} title="Rename"
+      class="gv-facet-edit shrink-0 w-6 py-1 rounded text-xs text-zinc-500 hover:text-zinc-100 hover:bg-zinc-800">✎</button>`;
+  const rows = collapsed ? "" : projects.map((p) => {
+    const subs = (f.sub_projects || []).filter((s) => s.project === p.name);
+    const direct = p.count - subs.reduce((n, s) => n + s.count, 0);
+    const open = state.treeOpen.has(p.name);
+    const pActive = fl.project === p.name && !fl.sub_project;
+    const toggle = subs.length
+      ? `<button data-tree-toggle="${esc(p.name)}" class="shrink-0 w-4 text-[10px] text-zinc-500 hover:text-zinc-200" title="${open ? "Collapse" : "Expand"}">${open ? "▾" : "▸"}</button>`
+      : `<span class="shrink-0 w-4"></span>`;
+    let html = `<div class="gv-facet-row gv-drop-row flex items-center gap-0.5 rounded" data-drop-project="${esc(p.name)}" data-drop-sub="">
+      ${toggle}
+      <button data-tree-project="${esc(p.name)}" class="${rowCls(pActive)}"><span class="truncate" title="${esc(p.name)}">${esc(p.name)}</span>${cnt(p.count, pActive)}</button>
+      ${pencil(`data-action="rename-project" data-val="${esc(p.name)}"`)}</div>`;
+    if (open && subs.length) {
+      const child = (label, sub, n, rename) => {
+        const active = fl.project === p.name && fl.sub_project === sub;
+        return `<div class="gv-facet-row gv-drop-row flex items-center gap-0.5 pl-4 rounded" data-drop-project="${esc(p.name)}" data-drop-sub="${sub === NO_SUB ? "" : esc(sub)}">
+          <button data-tree-project="${esc(p.name)}" data-tree-sub="${esc(sub)}" class="${rowCls(active)}">
+            <span class="truncate ${sub === NO_SUB ? "italic text-zinc-500" : ""}" title="${esc(label)}">${esc(label)}</span>${cnt(n, active)}</button>
+          ${rename ? pencil(`data-action="rename-sub" data-project="${esc(p.name)}" data-val="${esc(sub)}"`) : `<span class="shrink-0 w-6"></span>`}</div>`;
+      };
+      if (direct > 0) html += child(`(directly in ${p.name})`, NO_SUB, direct, false);
+      html += subs.map((s) => child(s.name, s.name, s.count, true)).join("");
+    }
+    return html;
+  }).join("");
+  return `<div class="mb-4">
+    <button data-collapse="project" class="w-full flex items-center justify-between text-[11px] uppercase tracking-wider text-zinc-500 mb-1.5 font-semibold hover:text-zinc-300">
+      <span>Projects</span><span class="text-[10px]">${collapsed ? "▸" : "▾"}</span>
+    </button>${rows}
+    ${collapsed ? "" : `<div class="text-[10px] text-zinc-600 px-2 mt-1">Drag selected cards onto a project to move them.</div>`}
+  </div>`;
+}
+
 function renderSidebar() {
   const f = state.facets, fl = state.filters;
   if (!f) return "";
   const mk = (arr) => (arr || []).map((x) => ({ value: x.name, label: x.name, count: x.count }));
-  const subs = fl.project
-    ? f.sub_projects.filter((s) => s.project === fl.project).map((s) => ({ value: s.name, label: s.name, count: s.count }))
-    : [];
   const uploads = [];
   for (const p of state.config.platforms) {
     const u = f.uploads[p] || { yes: 0, no: 0 };
@@ -399,8 +446,7 @@ function renderSidebar() {
   const anyFilter = ["project", "sub_project", "kind", "media_type", "character", "lora", "upload"].some((k) => fl[k]);
   return `<aside id="gv-sidebar" class="w-60 shrink-0 pr-4 border-r border-zinc-800/70 sticky top-14 self-start max-h-[calc(100vh-4.5rem)] overflow-y-auto">
     ${anyFilter ? `<button id="gv-clearfilters" class="mb-3 w-full text-sm px-2 py-1.5 rounded-lg border border-zinc-700 text-zinc-300 hover:bg-zinc-800">✕ Clear filters</button>` : ""}
-    ${facetSection("Project", mk(f.projects), "project", fl.project, "rename-project")}
-    ${fl.project ? facetSection("Sub-project", subs, "sub_project", fl.sub_project) : ""}
+    ${projectTreeHtml()}
     ${facetSection("Kind", mk(f.kinds), "kind", fl.kind)}
     ${facetSection("Media type", mk(f.media_types), "media_type", fl.media_type)}
     ${facetSection("Character", mk(f.characters), "character", fl.character)}
@@ -411,9 +457,9 @@ function renderSidebar() {
 
 function libraryCard(a) {
   const checked = state.selection.has(a.id);
-  const selectBox = `<label class="absolute top-2 left-2 z-10 cursor-pointer ${checked ? "" : "opacity-0 group-hover:opacity-100"}" title="Select">
+  const selectBox = `<label class="absolute top-2 left-2 z-10 cursor-pointer ${checked || state.selection.size ? "" : "opacity-0 group-hover:opacity-100"}" title="Select (Shift+click: range)">
         <input type="checkbox" data-action="select" data-id="${a.id}" ${checked ? "checked" : ""} class="w-4 h-4 accent-indigo-500"></label>`;
-  return `<div class="gv-card group relative bg-zinc-900 rounded-xl overflow-hidden border ${checked ? "border-indigo-500" : "border-zinc-800 hover:border-zinc-600"}" tabindex="0" data-id="${a.id}">
+  return `<div class="gv-card group relative bg-zinc-900 rounded-xl overflow-hidden border ${checked ? "border-indigo-500" : "border-zinc-800 hover:border-zinc-600"}" tabindex="0" data-id="${a.id}" draggable="true">
     ${selectBox}
     ${thumbHtml(a)}
     <div class="px-2.5 py-2">
@@ -446,7 +492,11 @@ function renderLibrary() {
           <input type="checkbox" id="gv-lib-selectall" ${state.assets.length && state.assets.every((a) => state.selection.has(a.id)) ? "checked" : ""} class="w-4 h-4 accent-indigo-500"> Select all
         </label>
         <span class="text-sm text-zinc-500">${state.assets.length} ${state.assets.length === 1 ? "file" : "files"}${state.selection.size ? ` · ${state.selection.size} selected` : ""}</span>
-        <div class="flex-1"></div>${sortSel}
+        <div class="flex-1"></div>
+        <button data-action="player-open" ${state.assets.some((a) => a.media_type !== "audio") ? "" : "disabled"}
+          title="Watch full screen: plays the files shown here (or only the selected ones). Esc exits."
+          class="px-3 py-1.5 rounded-lg text-sm bg-indigo-600 hover:bg-indigo-500 text-white font-medium disabled:opacity-40">▶ Play${state.selection.size ? ` selected (${state.selection.size})` : ""}</button>
+        ${sortSel}
       </div>
       ${grid}
     </section>
@@ -485,7 +535,7 @@ function inboxCard(a) {
         ${m.model ? `<span class="truncate max-w-[12rem]" title="${esc(m.model)}">${esc(m.model.split(/[\\/]/).pop())}</span>` : ""}
       </div>
       ${m.positive_prompt ? `<div class="text-[11px] text-zinc-500 gv-clamp2" title="${esc(m.positive_prompt)}">${esc(m.positive_prompt)}</div>` : ""}
-      ${a.source_hint && a.source_hint !== "browser-upload" ? `<div class="text-[10px] text-zinc-600">Hint (drop folder): ${esc(a.source_hint)} — never applied automatically</div>` : ""}
+      ${a.source_hint && a.source_hint !== "browser-upload" ? `<div class="text-[10px] text-zinc-600 truncate" title="${esc(a.source_hint)}">${a.source_hint.startsWith("watch: ") ? `From ${esc(a.source_hint.slice(7))}` : `Hint (drop folder): ${esc(a.source_hint)}`} — never applied automatically</div>` : ""}
       <div class="grid grid-cols-2 gap-1.5 mt-auto pt-1">${fieldInputs("data-f", f)}</div>
       <button data-action="file-one" data-id="${a.id}"
         class="mt-1.5 w-full py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium">Add to library</button>
@@ -499,11 +549,51 @@ function inboxVisible() {
     : state.assets;
 }
 
+/* Watch-folder banner: errors, the backlog of older files, import progress. */
+function watchBannerHtml() {
+  return (state.watch || []).map((w) => {
+    const name = esc(w.path);
+    const key = esc(w.key);
+    if (w.ok === false)
+      return `<div class="mb-3 px-3 py-2 rounded-lg border border-amber-800 bg-amber-950/40 text-sm text-amber-200">Watch folder <b>${name}</b>: ${esc(w.error)}</div>`;
+    const btn = "px-2.5 py-1 rounded-lg text-xs border";
+    if (w.importing) {
+      const j = w.job || {};
+      return `<div class="mb-3 px-3 py-2 rounded-lg border border-indigo-800 bg-indigo-950/40 text-sm text-indigo-200 flex items-center gap-3 flex-wrap">
+        <span class="flex-1">Importing older files from <b>${name}</b> … ${j.done || 0} imported${j.failed ? `, ${j.failed} failed` : ""}, ${w.backlog_count} left (${fmtSize(w.backlog_bytes)})</span>
+        <button data-watch="stop" data-key="${key}" class="${btn} border-indigo-700 hover:bg-indigo-900">Stop</button></div>`;
+    }
+    if (!w.backlog_count) return "";
+    if (w.dismissed)
+      return `<div class="mb-2 text-xs text-zinc-600">${w.backlog_count} older file(s) in ${name} are not imported ·
+        <button data-watch="import" data-key="${key}" class="text-indigo-400 hover:underline">Import all</button></div>`;
+    return `<div class="mb-3 px-3 py-2 rounded-lg border border-zinc-700 bg-zinc-900 text-sm text-zinc-300 flex items-center gap-3 flex-wrap">
+      <span class="flex-1"><b>${name}</b> has <b>${w.backlog_count}</b> older file(s) (${fmtSize(w.backlog_bytes)}) from before it was watched. They stay where they are unless you import them.</span>
+      <button data-watch="import" data-key="${key}" class="${btn} border-indigo-600 bg-indigo-600 text-white hover:bg-indigo-500">Import all</button>
+      <button data-watch="dismiss" data-key="${key}" class="${btn} border-zinc-700 hover:bg-zinc-800">Ignore</button></div>`;
+  }).join("");
+}
+
+async function loadWatch() {
+  try { state.watch = (await api("/api/watch")).folders || []; } catch { state.watch = []; }
+}
+
+async function watchAction(action, key) {
+  if (action === "import" && !confirm("Import all older files from this folder into the Inbox?\n\nThey are MOVED out of the folder (no copies). This can take a while for many files; new renders keep coming in meanwhile, and you can stop at any time.")) return;
+  try {
+    state.watch = (await jpost(`/api/watch/${action}`, { key })).folders || [];
+    if (action === "import") toast("Import started");
+    renderMain();
+  } catch (e) { toast("Failed: " + e.message, true); }
+}
+
 function renderInbox() {
+  const banner = watchBannerHtml();
   if (!state.assets.length)
-    return `<div class="text-zinc-500 text-sm py-16 text-center">
+    return `${banner}<div class="text-zinc-500 text-sm py-16 text-center">
       Inbox is empty. Drag&nbsp;&amp;&nbsp;drop files into this window<br>
-      or put them into the drop folder: <code class="text-zinc-400">${esc(state.config.library_root)}\\drop</code></div>`;
+      or put them into the drop folder: <code class="text-zinc-400">${esc(state.config.library_root)}\\drop</code>
+      ${(state.watch || []).length ? `<br>or render into a watch folder: ${state.watch.map((w) => `<code class="text-zinc-400">${esc(w.path)}</code>`).join(", ")}` : ""}</div>`;
   const counts = { video: 0, image: 0, audio: 0 };
   state.assets.forEach((a) => { counts[a.media_type] = (counts[a.media_type] || 0) + 1; });
   const chips = [[null, `All (${state.assets.length})`], ["video", `Videos (${counts.video})`],
@@ -514,7 +604,10 @@ function renderInbox() {
   const visible = inboxVisible();
   const allSelected = visible.length && visible.every((a) => state.selection.has(a.id));
   return `<div>
+    ${banner}
     <div class="flex items-center gap-3 mb-3 flex-wrap">
+      <button data-action="review-open" ${visible.length ? "" : "disabled"} title="Go through the files one by one with the keyboard: keep or trash"
+        class="px-3 py-1 rounded-lg text-sm bg-indigo-600 hover:bg-indigo-500 text-white font-medium disabled:opacity-40">▶ Review${state.inboxFilter ? " (filtered)" : ""} (${visible.length})</button>
       <div class="flex gap-1.5">${chips}</div>
       <label class="flex items-center gap-2 text-sm text-zinc-400 cursor-pointer">
         <input type="checkbox" id="gv-selectall" ${allSelected ? "checked" : ""} class="w-4 h-4 accent-indigo-500"> Select all${state.inboxFilter ? " (filtered)" : ""}
@@ -537,7 +630,9 @@ function renderBulkbar() {
       <div class="flex items-center gap-2 flex-wrap" data-fields>
         <span class="text-sm text-zinc-300 font-medium mr-1">${state.selection.size} selected:</span>
         <input data-f="project" data-bulklib="project" value="${esc(b.project)}" placeholder="Project (keep)" class="gv-combo ${base} w-40" data-src="projects" autocomplete="off">
-        <input data-f="sub_project" data-bulklib="sub_project" value="${esc(b.sub_project)}" placeholder="Sub-project (keep)" class="gv-combo ${base} w-40" data-src="sub_projects" autocomplete="off">
+        <input data-f="sub_project" data-bulklib="sub_project" value="${b.clearSub ? "" : esc(b.sub_project)}" placeholder="${b.clearSub ? "(no sub-project)" : "Sub-project (keep)"}" ${b.clearSub ? "disabled" : ""} class="gv-combo ${base} w-40 ${b.clearSub ? "opacity-50" : ""}" data-src="sub_projects" autocomplete="off">
+        <label class="flex items-center gap-1 text-xs text-zinc-400 cursor-pointer" title="Move the files out of their sub-project, directly into the project">
+          <input type="checkbox" id="gv-bulk-clearsub" ${b.clearSub ? "checked" : ""} class="w-3.5 h-3.5 accent-indigo-500"> none</label>
         <select data-bulklib="kind" class="${base} w-32">
           <option value="">Kind: keep</option>
           ${state.values.kinds.map((k) => `<option value="${esc(k)}" ${b.kind === k ? "selected" : ""}>${esc(k)}</option>`).join("")}
@@ -581,6 +676,8 @@ function renderTrash() {
         <input type="checkbox" id="gv-trash-selectall" ${allSelected ? "checked" : ""} class="w-4 h-4 accent-indigo-500"> Select all
       </label>
       <span class="text-sm text-zinc-500">${state.assets.length} in trash${state.selection.size ? ` · ${state.selection.size} selected` : ""}</span>
+      <div class="flex-1"></div>
+      <button data-action="empty-trash" class="px-3 py-1.5 rounded-lg bg-red-900/70 hover:bg-red-800 text-red-200 text-sm">Empty trash (${state.assets.length})</button>
     </div>
     <div id="gv-grid" class="grid gap-3 ${state.selection.size ? "pb-24" : ""}" style="grid-template-columns:repeat(auto-fill,minmax(260px,1fr))">
     ${state.assets.map((a) => {
@@ -1121,17 +1218,61 @@ async function moveBulk() {
   const b = state.bulkLib;
   const patch = {};
   if (b.project.trim()) patch.project = b.project.trim();
-  if (b.sub_project.trim()) patch.sub_project = b.sub_project.trim();
+  if (b.clearSub) patch.clear_sub_project = true;
+  else if (b.sub_project.trim()) patch.sub_project = b.sub_project.trim();
   if (b.kind) patch.kind = b.kind;
   if (!Object.keys(patch).length) { toast("Set a project, sub-project or kind first — empty fields keep the current value", true); return; }
+  await moveIds([...state.selection], patch);
+}
+
+/* Move files (bulk bar or drag & drop onto the project tree). */
+async function moveIds(ids, patch) {
   try {
-    state.selection.forEach(releaseAsset);
-    const r = await jpost("/api/assets/move-bulk", { ids: [...state.selection], ...patch });
+    ids.forEach(releaseAsset);
+    const r = await jpost("/api/assets/move-bulk", { ids, ...patch });
     reportBulk(`${r.moved.length} file(s) moved`, r.errors);
     // keep failed files selected so they can simply be retried
     state.selection = new Set(r.errors.map((e) => Number(e.id)));
     await refresh();
   } catch (e) { toast("Move failed: " + e.message, true); }
+}
+
+/* Drop of library cards onto a project-tree row. */
+async function dropOnTree(ids, project, sub) {
+  const target = sub ? `${project} / ${sub}` : `${project} (no sub-project)`;
+  const files = ids.length === 1 ? `"${(assetById(ids[0]) || {}).original_name || "1 file"}"` : `${ids.length} files`;
+  if (!confirm(`Move ${files} to ${target}?\n\nThe kind stays the same.`)) return;
+  await moveIds(ids, sub ? { project, sub_project: sub } : { project, clear_sub_project: true });
+}
+
+async function renameSubProject(project, old) {
+  const facet = ((state.facets || {}).sub_projects || []).find((s) => s.project === project && s.name === old);
+  const input = prompt(`Rename sub-project "${old}" in "${project}" (${facet ? facet.count : 0} file(s)) to:`, old);
+  if (input == null) return;
+  const name = input.trim();
+  if (!name || name === old) return;
+  const exists = ((state.facets || {}).sub_projects || []).some((s) => s.project === project && s.name === name);
+  if (exists && !confirm(`"${project}" already has a sub-project "${name}".\n\nMerge "${old}" into "${name}"?`)) return;
+  try {
+    const r = await jpost("/api/projects/rename-sub", { project, old, new: name });
+    if (state.filters.project === project && state.filters.sub_project === old) state.filters.sub_project = name;
+    reportBulk(`Sub-project renamed to "${name}" (${r.renamed} file(s))`, r.errors);
+    await refresh();
+  } catch (e) { toast("Rename failed: " + e.message, true); }
+}
+
+async function emptyTrash() {
+  const n = state.counts.trash;
+  if (!n) return;
+  const bytes = state.view === "trash" ? state.assets.reduce((sum, a) => sum + ((a.meta || {}).filesize || 0), 0) : 0;
+  if (!confirm(`Empty the trash?\n\n${n} file(s)${bytes ? ` (${fmtSize(bytes)})` : ""} will be deleted FOREVER. This cannot be undone.`)) return;
+  state.assets.forEach((a) => releaseAsset(a.id));
+  try {
+    const r = await jpost("/api/trash/empty");
+    reportBulk(`Trash emptied: ${r.done.length} file(s) deleted, ${fmtSize(r.freed_bytes) || "0 KB"} freed`, r.errors);
+    state.selection = new Set(r.errors.map((e) => Number(e.id)));
+    await refresh();
+  } catch (e) { toast("Emptying the trash failed: " + e.message, true); }
 }
 
 /* Trash / restore / delete-forever for the whole selection. */
@@ -1456,6 +1597,531 @@ function toggleAudio(id) {
   audioPlayingId = Number(id);
 }
 
+/* ---------- inbox review mode (2.5.0) ----------
+   One file at a time, full screen, decided with the keyboard: keep (stays in
+   the inbox) or trash (restorable). Works on a snapshot of the visible inbox
+   so background refreshes don't shift the list. The next files are preloaded
+   in a small element pool, so stepping through feels instant. */
+const REVIEW_KEYS = [["Enter", "keep"], ["Del", "trash"], ["← / →", "back / next"], ["Z", "undo"],
+                     ["F", "favorite"], ["1–5", "rating"], ["M", "sound"], ["Esc", "finish"]];
+
+function openReview() {
+  const items = inboxVisible().map((a) => ({ ...a }));
+  if (!items.length) return;
+  closeDrawer();
+  hideCombo();
+  state.review = { items, idx: 0, decisions: new Map(), history: [], muted: true,
+                   done: false, busy: false, pool: new Map() };
+  let el = $("#gv-review");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "gv-review";
+    document.body.appendChild(el);
+  }
+  el.className = "bg-zinc-950 flex-col";
+  // layout-critical styles inline (Tailwind-CDN classes can arrive a frame late)
+  Object.assign(el.style, { position: "fixed", inset: "0", zIndex: "65", display: "flex" });
+  renderReview();
+}
+
+function closeReview() {
+  const r = state.review;
+  if (!r) return;
+  r.pool.forEach((m) => unloadMedia(m));
+  r.pool.clear();
+  const el = $("#gv-review");
+  if (el) { el.innerHTML = ""; el.style.display = "none"; }
+  state.review = null;
+  refresh();
+}
+
+function reviewMediaEl(a) {
+  const r = state.review;
+  let el = r.pool.get(a.id);
+  if (el) return el;
+  const fit = "max-w-full max-h-full object-contain";
+  if (a.media_type === "video") {
+    el = document.createElement("video");
+    Object.assign(el, { loop: true, playsInline: true, preload: "auto", muted: r.muted });
+    el.className = fit;
+  } else if (a.media_type === "image") {
+    el = document.createElement("img");
+    el.draggable = false;
+    el.className = fit;
+  } else {
+    el = document.createElement("audio");
+    Object.assign(el, { controls: true, preload: "auto", loop: true });
+    el.className = "w-[32rem] max-w-full";
+  }
+  el.src = a.media_url;
+  r.pool.set(a.id, el);
+  return el;
+}
+
+/* Keep the pool to the previous, current and next two files. */
+function reviewPrune() {
+  const r = state.review;
+  const keep = new Set(r.items.slice(Math.max(0, r.idx - 1), r.idx + 3).map((a) => a.id));
+  for (const [id, el] of r.pool) {
+    if (!keep.has(id)) { unloadMedia(el); r.pool.delete(id); }
+  }
+}
+
+function reviewReleaseEl(id) {
+  const r = state.review;
+  const el = r.pool.get(id);
+  if (el) { unloadMedia(el); el.remove(); r.pool.delete(id); }
+}
+
+function reviewMetaHtml(a) {
+  const m = a.meta || {};
+  const row = (k, v) => v || v === 0 ? `<div class="flex gap-2"><span class="text-zinc-500 w-20 shrink-0">${k}</span><span class="text-zinc-300 break-all">${esc(v)}</span></div>` : "";
+  const loras = (m.loras || []).map((l) => `${l.name}${l.weight != null ? ` @ ${l.weight}` : ""}`).join(", ");
+  let stars = "";
+  for (let i = 1; i <= 5; i++)
+    stars += `<span class="gv-star text-2xl ${i <= (a.rating || 0) ? "text-amber-400" : "text-zinc-600 hover:text-zinc-400"}" data-action="review-rate" data-val="${i}">★</span>`;
+  return `
+    <div class="flex items-center gap-3">${stars}
+      <span class="gv-star text-2xl ${a.favorite ? "text-rose-400" : "text-zinc-600 hover:text-zinc-400"}" data-action="review-fav" title="Favorite (F)">♥</span></div>
+    <div class="text-sm text-zinc-200 font-medium break-all">${esc(a.original_name)}</div>
+    <div class="space-y-1 text-xs">
+      ${row("Resolution", m.width ? `${m.width} × ${m.height}` : "")}
+      ${row("Duration", m.duration ? fmtSec(m.duration) : "")}
+      ${row("Size", fmtSize(m.filesize))}
+      ${row("Created", fmtDate(a.created_at))}
+      ${row("Model", m.model ? String(m.model).split(/[\\/]/).pop() : "")}
+      ${row("LoRAs", loras)}
+      ${row("Seed", m.seed)}
+      ${row("Sampler", m.sampler ? `${m.sampler}${m.scheduler ? " / " + m.scheduler : ""}` : "")}
+      ${row("Steps / CFG", m.steps ? `${m.steps}${m.cfg != null ? " / " + m.cfg : ""}` : "")}
+      ${row("Source", a.source_hint && a.source_hint !== "browser-upload" ? a.source_hint.replace(/^watch: /, "") : "")}
+    </div>
+    ${m.positive_prompt ? `<div><div class="text-[11px] text-zinc-500 mb-0.5">Prompt</div>
+      <div class="text-xs text-zinc-300 whitespace-pre-wrap break-words">${esc(m.positive_prompt)}</div></div>` : ""}
+    ${m.negative_prompt ? `<div><div class="text-[11px] text-zinc-500 mb-0.5">Negative</div>
+      <div class="text-xs text-zinc-500 gv-clamp3 break-words" title="${esc(m.negative_prompt)}">${esc(m.negative_prompt)}</div></div>` : ""}`;
+}
+
+function reviewSummaryHtml() {
+  const r = state.review;
+  const kept = [...r.decisions.values()].filter((d) => d === "keep").length;
+  const trashed = [...r.decisions.values()].filter((d) => d === "trash").length;
+  const open = r.items.length - kept - trashed;
+  return `<div class="flex-1 flex items-center justify-center p-6">
+    <div class="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 w-[28rem] max-w-full space-y-4 text-center">
+      <div class="text-lg font-semibold text-zinc-100">Review finished</div>
+      <div class="flex justify-center gap-6 text-sm">
+        <div><div class="text-2xl font-bold text-emerald-400">${kept}</div><div class="text-zinc-500">kept</div></div>
+        <div><div class="text-2xl font-bold text-red-400">${trashed}</div><div class="text-zinc-500">trashed</div></div>
+        <div><div class="text-2xl font-bold text-zinc-400">${open}</div><div class="text-zinc-500">not decided</div></div>
+      </div>
+      ${trashed ? `<div class="text-xs text-zinc-500">Trashed files are in the Trash tab and can still be restored.</div>` : ""}
+      <div class="flex flex-col gap-2 pt-2">
+        ${kept ? `<button data-action="review-select-kept" class="w-full py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium">Select the ${kept} kept file(s) to file them (Enter)</button>` : ""}
+        <button data-action="review-back" class="w-full py-2 rounded-lg border border-zinc-700 text-zinc-300 hover:bg-zinc-800">Back to the review</button>
+        <button data-action="review-close" class="w-full py-2 rounded-lg border border-zinc-700 text-zinc-300 hover:bg-zinc-800">Close (Esc)</button>
+      </div>
+    </div></div>`;
+}
+
+function renderReview() {
+  const r = state.review, el = $("#gv-review");
+  if (!r || !el) return;
+  r.pool.forEach((m) => { if (m.pause) m.pause(); });
+  const kept = [...r.decisions.values()].filter((d) => d === "keep").length;
+  const trashed = [...r.decisions.values()].filter((d) => d === "trash").length;
+  const header = `<div class="flex items-center gap-4 px-4 py-2.5 border-b border-zinc-800">
+      <span class="text-sm font-semibold text-indigo-300">Review</span>
+      <span class="text-sm text-zinc-400">${r.done ? r.items.length : r.idx + 1} / ${r.items.length}</span>
+      <div class="flex-1 h-1.5 bg-zinc-800 rounded overflow-hidden"><div class="h-full bg-indigo-500" style="width:${(r.decisions.size / r.items.length) * 100}%"></div></div>
+      <span class="text-xs text-emerald-400">${kept} kept</span>
+      <span class="text-xs text-red-400">${trashed} trashed</span>
+      <button data-action="review-finish" class="px-3 py-1 rounded-lg border border-zinc-700 text-sm text-zinc-300 hover:bg-zinc-800">Finish (Esc)</button>
+    </div>`;
+  if (r.done) { el.innerHTML = header + reviewSummaryHtml(); return; }
+
+  const a = r.items[r.idx];
+  const decision = r.decisions.get(a.id);
+  const badge = decision === "trash"
+    ? `<div class="absolute top-3 left-3 px-2.5 py-1 rounded-lg bg-red-900/90 text-red-100 text-sm">In the trash — Enter keeps it (restores)</div>`
+    : decision === "keep" ? `<div class="absolute top-3 left-3 px-2.5 py-1 rounded-lg bg-emerald-900/90 text-emerald-100 text-sm">Kept</div>` : "";
+  const keys = REVIEW_KEYS.map(([k, l]) => `<span><kbd class="px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-300">${k}</kbd> ${l}</span>`).join("");
+  el.innerHTML = `${header}
+    <div class="flex-1 flex min-h-0">
+      <div id="gv-review-stage" class="relative flex-1 min-w-0 flex items-center justify-center bg-black p-2"></div>
+      <aside class="w-96 max-w-[40vw] shrink-0 border-l border-zinc-800 p-4 space-y-4 overflow-y-auto">${reviewMetaHtml(a)}</aside>
+    </div>
+    <div class="flex items-center gap-3 px-4 py-2.5 border-t border-zinc-800 flex-wrap">
+      <button data-action="review-prev" class="px-3 py-1.5 rounded-lg border border-zinc-700 text-sm text-zinc-300 hover:bg-zinc-800 ${r.idx === 0 ? "opacity-30 pointer-events-none" : ""}">← Back</button>
+      <button data-action="review-trash" ${r.busy ? "disabled" : ""} class="px-5 py-1.5 rounded-lg bg-red-900/80 hover:bg-red-800 text-red-100 text-sm font-medium">✕ Trash (Del)</button>
+      <button data-action="review-keep" ${r.busy ? "disabled" : ""} class="px-5 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-sm font-medium">✓ Keep (Enter)</button>
+      <button data-action="review-next" class="px-3 py-1.5 rounded-lg border border-zinc-700 text-sm text-zinc-300 hover:bg-zinc-800">Next →</button>
+      <button data-action="review-undo" class="px-3 py-1.5 rounded-lg border border-zinc-700 text-sm text-zinc-300 hover:bg-zinc-800 ${r.history.length ? "" : "opacity-30 pointer-events-none"}">↶ Undo (Z)</button>
+      ${a.media_type === "video" ? `<button data-action="review-mute" class="px-3 py-1.5 rounded-lg border border-zinc-700 text-sm text-zinc-300 hover:bg-zinc-800">${r.muted ? "🔇 Sound off" : "🔊 Sound on"} (M)</button>` : ""}
+      <div class="flex-1"></div>
+      <div class="flex gap-3 text-[11px] text-zinc-500 flex-wrap">${keys}</div>
+    </div>`;
+
+  const stage = $("#gv-review-stage");
+  if (decision === "trash") {
+    // the file now lives in .trash — show its thumbnail instead
+    stage.innerHTML = a.thumb_url ? `<img src="${esc(a.thumb_url)}" class="max-w-full max-h-full object-contain opacity-40">` : "";
+  } else {
+    const m = reviewMediaEl(a);
+    stage.appendChild(m);
+    if (m.tagName === "VIDEO") { m.muted = r.muted; m.play().catch(() => {}); }
+    if (m.tagName === "AUDIO") m.play().catch(() => {});
+  }
+  stage.insertAdjacentHTML("beforeend", badge);
+  // preload the next two files (detached elements still load)
+  r.items.slice(r.idx + 1, r.idx + 3).forEach((n) => { if (r.decisions.get(n.id) !== "trash") reviewMediaEl(n); });
+  reviewPrune();
+}
+
+function reviewGo(dir) {
+  const r = state.review;
+  r.idx += dir;
+  if (r.idx >= r.items.length) { r.idx = r.items.length - 1; r.done = true; }
+  if (r.idx < 0) r.idx = 0;
+  renderReview();
+}
+
+async function reviewSetTrash(a, trashed) {
+  if (trashed) {
+    reviewReleaseEl(a.id);
+    await jpost(`/api/assets/${a.id}/trash`);
+  } else {
+    await jpost(`/api/assets/${a.id}/restore`);
+  }
+}
+
+async function reviewDecide(action) {
+  const r = state.review;
+  if (!r || r.done || r.busy) return;
+  const a = r.items[r.idx];
+  const prev = r.decisions.get(a.id);
+  const wasTrash = prev === "trash", nowTrash = action === "trash";
+  if (wasTrash !== nowTrash) {
+    r.busy = true;
+    try { await reviewSetTrash(a, nowTrash); }
+    catch (e) { toast((nowTrash ? "Trash" : "Restore") + " failed: " + e.message, true); r.busy = false; renderReview(); return; }
+    r.busy = false;
+  }
+  r.decisions.set(a.id, action);
+  r.history.push({ id: a.id, idx: r.idx, prev });
+  reviewGo(1);
+}
+
+async function reviewUndo() {
+  const r = state.review;
+  if (!r || r.busy) return;
+  const h = r.history.pop();
+  if (!h) return;
+  const a = r.items.find((x) => x.id === h.id);
+  const cur = r.decisions.get(h.id);
+  if ((cur === "trash") !== (h.prev === "trash")) {
+    r.busy = true;
+    try { await reviewSetTrash(a, h.prev === "trash"); }
+    catch (e) { toast("Undo failed: " + e.message, true); r.history.push(h); r.busy = false; renderReview(); return; }
+    r.busy = false;
+  }
+  if (h.prev) r.decisions.set(h.id, h.prev); else r.decisions.delete(h.id);
+  r.idx = h.idx;
+  r.done = false;
+  renderReview();
+}
+
+async function reviewPatch(patch) {
+  const r = state.review;
+  if (!r || r.done) return;
+  const a = r.items[r.idx];
+  try {
+    const updated = await jpatch(`/api/assets/${a.id}`, patch);
+    a.rating = updated.rating;
+    a.favorite = updated.favorite;
+    renderReview();
+  } catch (e) { toast("Saving failed: " + e.message, true); }
+}
+
+function reviewFinish() {
+  const r = state.review;
+  if (!r) return;
+  if (r.done || !r.decisions.size) { closeReview(); return; }
+  r.done = true;
+  renderReview();
+}
+
+function reviewSelectKept() {
+  const r = state.review;
+  const kept = r.items.filter((a) => r.decisions.get(a.id) === "keep").map((a) => a.id);
+  closeReview();
+  state.inboxFilter = null;
+  state.selection = new Set(kept);
+  renderMain();
+}
+
+function reviewKey(e) {
+  const r = state.review;
+  const k = e.key;
+  if (r.done) {
+    if (k === "Escape") closeReview();
+    else if (k === "Enter" && [...r.decisions.values()].includes("keep")) reviewSelectKept();
+    else return;
+  } else if (k === "Enter") reviewDecide("keep");
+  else if (k === "Delete") reviewDecide("trash");
+  else if (k === "ArrowRight") reviewGo(1);
+  else if (k === "ArrowLeft") { if (r.idx > 0) reviewGo(-1); }
+  else if (k === "z" || k === "Z") reviewUndo();
+  else if (k === "f" || k === "F") reviewPatch({ favorite: !r.items[r.idx].favorite });
+  else if (k >= "1" && k <= "5") {
+    const v = Number(k);
+    reviewPatch({ rating: r.items[r.idx].rating === v ? 0 : v });
+  }
+  else if (k === "m" || k === "M") reviewToggleMute();
+  else if (k === "Escape") reviewFinish();
+  else return;
+  e.preventDefault();
+}
+
+function reviewToggleMute() {
+  const r = state.review;
+  r.muted = !r.muted;
+  r.pool.forEach((m) => { if (m.tagName === "VIDEO") m.muted = r.muted; });
+  renderReview();
+}
+
+/* ---------- fullscreen player (2.5.0) ----------
+   Plays what the Library shows (filter, search, sort) — or only the selected
+   cards — full screen: videos play through, images stay IMAGE_SECONDS, then
+   the next file starts; after the last one it starts over. Loop keeps the
+   current file. No delete key on purpose: watching must never trash anything. */
+const IMAGE_SECONDS = 5;
+const PLAYER_KEYS = [["← / →", "prev / next"], ["Space", "pause"], ["A", "loop"], ["M", "sound"],
+                     ["V", "videos only"], ["I", "info"], ["F", "favorite"], ["1–5", "rating"], ["Esc", "exit"]];
+const playerPref = (k, def) => { try { const v = localStorage.getItem("gv-player-" + k); return v == null ? def : v === "1"; } catch { return def; } };
+const savePlayerPref = (k, v) => { try { localStorage.setItem("gv-player-" + k, v ? "1" : "0"); } catch {} };
+
+function openPlayer() {
+  const base = state.selection.size
+    ? state.assets.filter((a) => state.selection.has(a.id))
+    : state.assets;
+  const all = base.filter((a) => a.media_type === "video" || a.media_type === "image").map((a) => ({ ...a }));
+  if (!all.length) { toast("Nothing to play — no videos or images in this view", true); return; }
+  closeDrawer();
+  hideCombo();
+  const videosOnly = playerPref("videos", false) && all.some((a) => a.media_type === "video");
+  state.player = { all, items: videosOnly ? all.filter((a) => a.media_type === "video") : all, idx: 0,
+                   videosOnly, loop: playerPref("loop", false), muted: playerPref("muted", false),
+                   info: playerPref("info", false), paused: false, pool: new Map(), timer: null,
+                   hintUntil: Date.now() + 4000 };
+  let el = $("#gv-player");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "gv-player";
+    document.body.appendChild(el);
+  }
+  Object.assign(el.style, { position: "fixed", inset: "0", zIndex: "66", display: "block", background: "#000" });
+  el.innerHTML = `<div id="gv-player-stage" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center"></div>
+    <div id="gv-player-ui"></div>`;
+  if (document.documentElement.requestFullscreen)
+    document.documentElement.requestFullscreen().catch(() => {});
+  renderPlayer();
+  setTimeout(() => { if (state.player) renderPlayerUI(); }, 4100);   // fade out the key hint
+}
+
+function closePlayer() {
+  const p = state.player;
+  if (!p) return;
+  clearTimeout(p.timer);
+  p.pool.forEach((m) => unloadMedia(m));
+  p.pool.clear();
+  state.player = null;
+  const el = $("#gv-player");
+  if (el) { el.innerHTML = ""; el.style.display = "none"; }
+  if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {});
+  refresh();
+}
+
+function playerMediaEl(a) {
+  const p = state.player;
+  let el = p.pool.get(a.id);
+  if (el) return el;
+  if (a.media_type === "video") {
+    el = document.createElement("video");
+    Object.assign(el, { playsInline: true, preload: "auto" });
+    el.addEventListener("ended", () => {
+      const cur = state.player;
+      if (cur && cur.items[cur.idx] && cur.items[cur.idx].id === a.id && !cur.loop) playerGo(1);
+    });
+  } else {
+    el = document.createElement("img");
+    el.draggable = false;
+  }
+  Object.assign(el.style, { maxWidth: "100%", maxHeight: "100%", width: "100%", height: "100%", objectFit: "contain" });
+  el.src = a.media_url;
+  p.pool.set(a.id, el);
+  return el;
+}
+
+function playerPrune() {
+  const p = state.player, n = p.items.length;
+  const keep = new Set([-1, 0, 1, 2].map((d) => p.items[(p.idx + d + n) % n].id));
+  for (const [id, el] of p.pool) {
+    if (!keep.has(id)) { unloadMedia(el); p.pool.delete(id); }
+  }
+}
+
+/* Small status icons + info panel + key hint; redrawn without touching the media. */
+function renderPlayerUI() {
+  const p = state.player, ui = $("#gv-player-ui");
+  if (!p || !ui) return;
+  const a = p.items[p.idx];
+  const m = a.meta || {};
+  const icon = (action, on, onTxt, offTxt, title) =>
+    `<button data-action="${action}" title="${title}" style="opacity:${on ? 1 : 0.45}"
+      class="px-2 py-1 rounded-md bg-black/50 hover:bg-black/80 text-white text-sm leading-none">${on ? onTxt : offTxt}</button>`;
+  const isVideo = a.media_type === "video";
+  const status = `<div style="position:absolute;top:12px;right:12px;display:flex;gap:6px;align-items:center;z-index:2">
+      <span class="px-2 py-1 rounded-md bg-black/50 text-zinc-300 text-xs">${p.idx + 1} / ${p.items.length}</span>
+      ${p.paused ? `<span class="px-2 py-1 rounded-md bg-black/50 text-white text-sm leading-none" title="Paused (Space)">⏸</span>` : ""}
+      ${icon("player-loop", p.loop, "🔁", "🔁", p.loop ? "Loop is ON — the current file repeats (A)" : "Loop is OFF — the next file starts automatically (A)")}
+      ${isVideo ? icon("player-mute", !p.muted, "🔊", "🔇", p.muted ? "Sound is OFF (M)" : "Sound is ON (M)") : ""}
+      ${icon("player-videos", p.videosOnly, "🎬", "🎬", p.videosOnly ? "Videos only (V)" : "Videos and images (V)")}
+      ${icon("player-info", p.info, "ⓘ", "ⓘ", "Info (I)")}
+      <button data-action="player-close" title="Exit (Esc)" class="px-2 py-1 rounded-md bg-black/50 hover:bg-black/80 text-white text-sm leading-none">✕</button>
+    </div>`;
+  let stars = "";
+  for (let i = 1; i <= 5; i++)
+    stars += `<span class="gv-star text-xl ${i <= (a.rating || 0) ? "text-amber-400" : "text-zinc-500 hover:text-zinc-300"}" data-action="player-rate" data-val="${i}">★</span>`;
+  const loras = (m.loras || []).map((l) => `${l.name}${l.weight != null ? ` @ ${l.weight}` : ""}`).join(", ");
+  const info = !p.info ? "" : `<div style="position:absolute;left:12px;bottom:12px;max-width:min(560px,90vw);max-height:45vh;overflow:auto;z-index:2"
+      class="bg-black/70 rounded-xl p-3 space-y-1.5 text-xs text-zinc-300">
+      <div class="flex items-center gap-2">${stars}
+        <span class="gv-star text-xl ${a.favorite ? "text-rose-400" : "text-zinc-500 hover:text-zinc-300"}" data-action="player-fav">♥</span></div>
+      <div class="text-sm text-white break-all">${esc(a.original_name)}</div>
+      <div class="text-zinc-400">${esc([a.project, a.sub_project, a.kind].filter(Boolean).join(" / "))}${m.width ? ` · ${m.width}×${m.height}` : ""}${m.duration ? ` · ${fmtSec(m.duration)}` : ""}</div>
+      ${m.model ? `<div class="text-zinc-400">${esc(String(m.model).split(/[\\/]/).pop())}${loras ? ` · ${esc(loras)}` : ""}</div>` : ""}
+      ${m.positive_prompt ? `<div class="whitespace-pre-wrap break-words">${esc(m.positive_prompt)}</div>` : ""}
+    </div>`;
+  const hint = Date.now() < p.hintUntil
+    ? `<div style="position:absolute;left:50%;top:56px;transform:translateX(-50%);max-width:90vw;z-index:2"
+        class="px-3 py-2 rounded-lg bg-black/70 text-[11px] text-zinc-300 flex gap-3 flex-wrap justify-center">${PLAYER_KEYS.map(([k, l]) =>
+          `<span><kbd class="px-1 rounded bg-zinc-800 border border-zinc-700">${k}</kbd> ${l}</span>`).join("")}</div>` : "";
+  ui.innerHTML = status + info + hint;
+}
+
+function renderPlayer() {
+  const p = state.player, stage = $("#gv-player-stage");
+  if (!p || !stage) return;
+  clearTimeout(p.timer);
+  p.pool.forEach((m) => { if (m.pause) m.pause(); });
+  const a = p.items[p.idx];
+  const m = playerMediaEl(a);
+  stage.innerHTML = "";
+  stage.appendChild(m);
+  if (m.tagName === "VIDEO") {
+    m.loop = p.loop;
+    m.muted = p.muted;
+    try { m.currentTime = 0; } catch {}
+    if (!p.paused) m.play().catch(() => {});
+  } else schedulePlayerImage();
+  renderPlayerUI();
+  // preload the next two and keep the previous one (wraps around)
+  const n = p.items.length;
+  [1, 2, -1].forEach((d) => playerMediaEl(p.items[(p.idx + d + n) % n]));
+  playerPrune();
+}
+
+function schedulePlayerImage() {
+  const p = state.player;
+  clearTimeout(p.timer);
+  const a = p.items[p.idx];
+  if (a.media_type !== "image" || p.loop || p.paused || p.items.length < 2) return;
+  p.timer = setTimeout(() => { if (state.player === p) playerGo(1); }, IMAGE_SECONDS * 1000);
+}
+
+function playerGo(dir) {
+  const p = state.player;
+  const n = p.items.length;
+  p.idx = (p.idx + dir + n) % n;           // after the last file it starts over
+  renderPlayer();
+}
+
+function playerCurrentEl() {
+  const p = state.player;
+  return p.pool.get(p.items[p.idx].id);
+}
+
+function playerTogglePause() {
+  const p = state.player, m = playerCurrentEl();
+  p.paused = !p.paused;
+  if (m && m.tagName === "VIDEO") { if (p.paused) m.pause(); else m.play().catch(() => {}); }
+  schedulePlayerImage();
+  renderPlayerUI();
+}
+
+function playerToggle(what) {
+  const p = state.player, m = playerCurrentEl();
+  if (what === "loop") {
+    p.loop = !p.loop;
+    savePlayerPref("loop", p.loop);
+    if (m && m.tagName === "VIDEO") m.loop = p.loop;
+    schedulePlayerImage();
+  } else if (what === "mute") {
+    p.muted = !p.muted;
+    savePlayerPref("muted", p.muted);
+    p.pool.forEach((x) => { if (x.tagName === "VIDEO") x.muted = p.muted; });
+  } else if (what === "info") {
+    p.info = !p.info;
+    savePlayerPref("info", p.info);
+  } else if (what === "videos") {
+    if (!p.all.some((a) => a.media_type === "video")) { toast("No videos in this view", true); return; }
+    const cur = p.items[p.idx];
+    p.videosOnly = !p.videosOnly;
+    savePlayerPref("videos", p.videosOnly);
+    p.items = p.videosOnly ? p.all.filter((a) => a.media_type === "video") : p.all;
+    // stay on the current file, or continue with the next video after it
+    let i = p.items.findIndex((a) => a.id === cur.id);
+    if (i < 0) {
+      const after = p.all.slice(p.all.indexOf(cur)).find((a) => a.media_type === "video");
+      i = after ? p.items.indexOf(after) : 0;
+    }
+    p.idx = i;
+    renderPlayer();
+    return;
+  }
+  renderPlayerUI();
+}
+
+async function playerPatch(patch) {
+  const p = state.player;
+  const a = p.items[p.idx];
+  try {
+    const updated = await jpatch(`/api/assets/${a.id}`, patch);
+    a.rating = updated.rating;
+    a.favorite = updated.favorite;
+    if (!p.info) toast(patch.favorite !== undefined ? (updated.favorite ? "♥ Favorite" : "Favorite removed")
+                                                     : (updated.rating ? `${"★".repeat(updated.rating)}` : "Rating removed"));
+    renderPlayerUI();
+  } catch (e) { toast("Saving failed: " + e.message, true); }
+}
+
+function playerKey(e) {
+  const p = state.player, k = e.key;
+  if (k === "ArrowRight") playerGo(1);
+  else if (k === "ArrowLeft") playerGo(-1);
+  else if (k === " ") playerTogglePause();
+  else if (k === "a" || k === "A") playerToggle("loop");
+  else if (k === "m" || k === "M") playerToggle("mute");
+  else if (k === "i" || k === "I") playerToggle("info");
+  else if (k === "v" || k === "V") playerToggle("videos");
+  else if (k === "f" || k === "F") playerPatch({ favorite: !p.items[p.idx].favorite });
+  else if (k >= "1" && k <= "5") { const v = Number(k); playerPatch({ rating: p.items[p.idx].rating === v ? 0 : v }); }
+  else if (k === "Escape") closePlayer();
+  else return;
+  e.preventDefault();
+}
+
 /* ---------- global event wiring ---------- */
 function initEvents() {
   document.addEventListener("click", async (e) => {
@@ -1477,6 +2143,35 @@ function initEvents() {
     else if (action === "bulk-restore") bulkAction("restore");
     else if (action === "bulk-purge") bulkAction("purge");
     else if (action === "rename-project") { e.stopPropagation(); renameProject(t.dataset.val); }
+    else if (action === "rename-sub") { e.stopPropagation(); renameSubProject(t.dataset.project, t.dataset.val); }
+    else if (action === "empty-trash") emptyTrash();
+    else if (action === "review-open") openReview();
+    else if (action === "player-open") openPlayer();
+    else if (action === "player-close") closePlayer();
+    else if (action === "player-loop") playerToggle("loop");
+    else if (action === "player-mute") playerToggle("mute");
+    else if (action === "player-info") playerToggle("info");
+    else if (action === "player-videos") playerToggle("videos");
+    else if (action === "player-fav") playerPatch({ favorite: !state.player.items[state.player.idx].favorite });
+    else if (action === "player-rate") {
+      const v = Number(t.dataset.val), cur = state.player.items[state.player.idx];
+      playerPatch({ rating: cur.rating === v ? 0 : v });
+    }
+    else if (action === "review-keep") reviewDecide("keep");
+    else if (action === "review-trash") reviewDecide("trash");
+    else if (action === "review-prev") { if (state.review && state.review.idx > 0) reviewGo(-1); }
+    else if (action === "review-next") reviewGo(1);
+    else if (action === "review-undo") reviewUndo();
+    else if (action === "review-mute") reviewToggleMute();
+    else if (action === "review-finish") reviewFinish();
+    else if (action === "review-close") closeReview();
+    else if (action === "review-back") { state.review.done = false; renderReview(); }
+    else if (action === "review-select-kept") reviewSelectKept();
+    else if (action === "review-fav") reviewPatch({ favorite: !state.review.items[state.review.idx].favorite });
+    else if (action === "review-rate") {
+      const v = Number(t.dataset.val), cur = state.review.items[state.review.idx];
+      reviewPatch({ rating: cur.rating === v ? 0 : v });
+    }
     else if (action === "purge") purgeAsset(id);
     else if (action === "audio-toggle") { e.stopPropagation(); toggleAudio(id); }
     else if (action === "copy-prompt") {
@@ -1566,6 +2261,41 @@ function initEvents() {
     if (t.dataset.audio !== undefined) { state.release.audio = t.value; renderMain(); }
   });
 
+  // library: drag cards (the selection, or just the dragged card) onto the project tree
+  let dragIds = null;
+  document.addEventListener("dragstart", (e) => {
+    const card = e.target.closest && e.target.closest(".gv-card[draggable]");
+    if (!card || !(state.view === "library" || state.view === "favorites")) return;
+    const id = Number(card.dataset.id);
+    dragIds = state.selection.has(id) ? [...state.selection] : [id];
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", `${dragIds.length} file(s)`);
+    document.body.classList.add("gv-dragging");
+  });
+  document.addEventListener("dragover", (e) => {
+    if (!dragIds) return;
+    const row = e.target.closest(".gv-drop-row");
+    $$(".gv-drop-over").forEach((r) => { if (r !== row) r.classList.remove("gv-drop-over"); });
+    if (row) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; row.classList.add("gv-drop-over"); }
+  });
+  document.addEventListener("drop", (e) => {
+    if (!dragIds) return;
+    const row = e.target.closest(".gv-drop-row");
+    const ids = dragIds;
+    dragIds = null;
+    document.body.classList.remove("gv-dragging");
+    $$(".gv-drop-over").forEach((r) => r.classList.remove("gv-drop-over"));
+    if (!row) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dropOnTree(ids, row.dataset.dropProject, row.dataset.dropSub || null);
+  }, true);
+  document.addEventListener("dragend", () => {
+    dragIds = null;
+    document.body.classList.remove("gv-dragging");
+    $$(".gv-drop-over").forEach((r) => r.classList.remove("gv-drop-over"));
+  });
+
   // release view: drag & drop concat order
   let dragIdx = null;
   document.addEventListener("dragstart", (e) => {
@@ -1605,6 +2335,33 @@ function initEvents() {
       renderMain();
       return;
     }
+    const w = e.target.closest("[data-watch]");
+    if (w) { watchAction(w.dataset.watch, w.dataset.key); return; }
+    const tog = e.target.closest("[data-tree-toggle]");
+    if (tog) {
+      const name = tog.dataset.treeToggle;
+      if (state.treeOpen.has(name)) {
+        state.treeOpen.delete(name);
+        // collapsing the active project also leaves its sub-project
+        if (state.filters.project === name && state.filters.sub_project) { state.filters.sub_project = null; refresh(); }
+      } else state.treeOpen.add(name);
+      localStorage.setItem("gv-tree-open", JSON.stringify([...state.treeOpen]));
+      renderMain();
+      return;
+    }
+    const tp = e.target.closest("[data-tree-project]");
+    if (tp) {
+      const proj = tp.dataset.treeProject, sub = tp.dataset.treeSub || null;
+      const same = state.filters.project === proj && (state.filters.sub_project || null) === sub;
+      state.filters.project = same ? (sub ? proj : null) : proj;
+      state.filters.sub_project = same ? null : sub;
+      if (state.filters.project === proj && !same) {   // selecting a project opens it
+        state.treeOpen.add(proj);
+        localStorage.setItem("gv-tree-open", JSON.stringify([...state.treeOpen]));
+      }
+      refresh();
+      return;
+    }
     const t = e.target.closest("[data-facet]");
     if (!t) return;
     const key = t.dataset.facet, val = t.dataset.val;
@@ -1613,12 +2370,24 @@ function initEvents() {
     refresh();
   });
 
-  // inbox selection checkboxes
+  // selection checkboxes — Shift+click selects the range from the last click
+  let shiftClick = false;
+  document.addEventListener("click", (e) => {
+    if (e.target.dataset && e.target.dataset.action === "select") shiftClick = e.shiftKey;
+  }, true);
   document.addEventListener("change", (e) => {
     const t = e.target;
+    if (t.id === "gv-bulk-clearsub") { state.bulkLib.clearSub = t.checked; renderBulkbar(); return; }
     if (t.dataset.action === "select") {
       const id = Number(t.dataset.id);
-      if (t.checked) state.selection.add(id); else state.selection.delete(id);
+      const list = (state.view === "inbox" ? inboxVisible() : state.assets).map((a) => a.id);
+      const from = list.indexOf(state.lastSelectId), to = list.indexOf(id);
+      if (shiftClick && from >= 0 && to >= 0) {
+        list.slice(Math.min(from, to), Math.max(from, to) + 1)
+          .forEach((x) => (t.checked ? state.selection.add(x) : state.selection.delete(x)));
+      } else if (t.checked) state.selection.add(id); else state.selection.delete(id);
+      state.lastSelectId = id;
+      shiftClick = false;
       renderMain();
     } else if (t.dataset.action === "upload-toggle") {
       const pf = t.dataset.pf;
@@ -1678,8 +2447,18 @@ function initEvents() {
     thumb.querySelectorAll("video").forEach((v) => { unloadMedia(v); v.remove(); });
   });
 
+  // player: click on the picture pauses; leaving full screen (the browser takes Esc) exits
+  document.addEventListener("click", (e) => {
+    if (state.player && e.target.closest("#gv-player-stage")) playerTogglePause();
+  });
+  document.addEventListener("fullscreenchange", () => {
+    if (!document.fullscreenElement && state.player) closePlayer();
+  });
+
   // keyboard shortcuts — only when no text field is focused
   document.addEventListener("keydown", (e) => {
+    if (state.player) { playerKey(e); return; }
+    if (state.review) { reviewKey(e); return; }
     const ae = document.activeElement;
     const typing = ae && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" || ae.tagName === "SELECT" || ae.isContentEditable);
     if (e.key === "Escape") {
@@ -1731,7 +2510,7 @@ function initEvents() {
   setInterval(() => {
     const ae = document.activeElement;
     const typing = ae && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" || ae.tagName === "SELECT");
-    if (typing || state.drawerId != null || document.hidden || state.view === "release") return;
+    if (typing || state.drawerId != null || document.hidden || state.view === "release" || state.review || state.player) return;
     refresh();
   }, 7000);
 }

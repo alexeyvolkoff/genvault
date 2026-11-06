@@ -16,8 +16,11 @@ stay on your disk and are never uploaded anywhere.
 - **Inbox workflow** — new files land in an Inbox and are filed into
   *Project / Sub-project / Kind* by you. Nothing is sorted automatically, so
   your structure stays exactly the way you want it.
-- **Two ways to import** — drag & drop into the browser window, or drop files
-  (or whole folders) into the watched `drop\` folder.
+- **Three ways to import** — drag & drop into the browser window, drop files
+  (or whole folders) into the watched `drop\` folder, or let genvault watch
+  your ComfyUI output folder and pick up every new render automatically.
+- **Review mode** — go through the Inbox one file at a time with the keyboard:
+  keep or trash, rate, favorite, undo.
 - **Metadata reader** — prompt, negative prompt, model, seed, sampler,
   scheduler, steps, CFG, shift and LoRAs are read from:
   - ComfyUI videos (graph in the `comment` tag, incl. Kijai WanVideoWrapper nodes)
@@ -26,14 +29,18 @@ stay on your disk and are never uploaded anywhere.
   Every field is editable, plus a free-text notes field (handy for Suno
   styles or anything without embedded data).
 - **Search & filters** — full-text search over prompts, tags, projects, LoRAs
-  and file names; sidebar facets with counts for project, sub-project, kind,
-  media type, character, LoRA and upload status.
+  and file names; a project tree (project → sub-project) and
+  sidebar facets with counts for kind, media type, character, LoRA and upload
+  status.
 - **Gallery** — video hover previews, audio waveform thumbnails with play
   button, star rating (1–5), favorites tab, "Top rated" sort.
-- **Bulk actions** — multi-select to file many inbox files at once, move
-  library files to another project / sub-project / kind, or delete them.
-- **Rename projects** — from the sidebar; the files are moved along.
-  Renaming onto an existing project merges the two.
+- **Full-screen player** — watch the current view (or a selection) full
+  screen, one file after another, with loop, sound and rating on the keyboard.
+- **Bulk actions** — multi-select (Shift+click for a range) to file many
+  inbox files at once, move library files to another project / sub-project /
+  kind — also by dragging them onto the project tree — or delete them.
+- **Rename projects and sub-projects** — from the sidebar; the files are moved
+  along. Renaming onto an existing name merges the two.
 - **Copy helpers** — "Copy prompt", "Copy all parameters", "Copy workflow JSON".
 - **Upload tracking** — per platform (default: X, Civitai, Reddit) with post
   URL and date, for assets of kind `release`.
@@ -84,20 +91,36 @@ stay on your disk and are never uploaded anywhere.
 ## Using genvault
 
 1. **Import** — drag files into the browser window, or put them into
-   `<library>\drop\`. Everything appears in the **Inbox**.
+   `<library>\drop\`. Everything appears in the **Inbox**. To pick up your
+   renders automatically, add your ComfyUI output folder as a *watch folder*
+   (see [Watch folders](#watch-folders)).
+   **Sort out the junk first:** click **▶ Review** in the Inbox and go through
+   the files with the keyboard — **Enter** keep, **Del** trash,
+   **← / →** back / next (no decision), **Z** undo, **F** favorite,
+   **1–5** rating, **M** sound, **Esc** finish. At the end, **Enter** selects the files you kept, ready to be
+   filed.
 2. **File** — in the Inbox, enter a project and pick a kind for each file
    (sub-project, character and tags are optional), then click
    **Add to library**. For many files: tick their checkboxes and use the bar at
    the bottom.
 3. **Browse** — the **Library** tab has search at the top and filters on the
    left. Click a card to open its details.
-4. **Details** — rate, favorite, edit metadata, copy the prompt, change the
+4. **Watch** — **▶ Play** (Library toolbar) plays the files you see, or only
+   the selected ones, full screen: **← / →** previous / next, **Space** pause,
+   **A** loop, **M** sound, **V** videos only, **I** info, **F** / **1–5**
+   favorite and rating, **Esc** exit. Images stay 5 seconds; after the last
+   file it starts over. The icons in the top right show loop / sound /
+   videos-only.
+5. **Details** — rate, favorite, edit metadata, copy the prompt, change the
    assignment (the file is moved on disk), track uploads. Click the file path
    to open it in Explorer.
-5. **Move many files** — tick cards in the Library, fill in only the fields you
-   want to change in the bottom bar (empty fields keep their value) and click
-   **Move**.
-6. **Release** — tick video cards → **Create release**. Per clip you can enter
+6. **Move many files** — tick cards in the Library (Shift+click selects a
+   range) and either **drag them onto a project or sub-project in the left
+   sidebar**, or fill in only the fields you want to change in the bottom bar
+   (empty fields keep their value; **none** moves them out of their
+   sub-project) and click **Move**. The ▸ arrow next to a project shows its
+   sub-projects.
+7. **Release** — tick video cards → **Create release**. Per clip you can enter
    how many seconds to **cut** from its start and end (the remaining length is
    shown right away) — or click **✂ Preview** to play the clip, step frame by
    frame, and set the cuts with **Set start here** / **Set end here** (the frame
@@ -107,19 +130,22 @@ stay on your disk and are never uploaded anywhere.
    **Start render**. A single clip can also be exported with only a trim or
    only silent audio. Progress is shown in the render queue; genvault stays
    usable meanwhile.
-7. **Rename a project** — hover over the project in the left sidebar and
-   click the ✎ pencil. All its files (including ones in the Trash) follow the
-   new name; if the new name already exists, both projects are merged.
-8. **Delete** — via the details panel, or tick several cards and click
+8. **Rename a project or sub-project** — hover over it in the left sidebar
+   and click the ✎ pencil. All its files (including ones in the Trash) follow
+   the new name; if the new name already exists, both are merged.
+9. **Delete** — via the details panel, or tick several cards and click
    **Delete (N)** in the bottom bar. Files go to the **Trash** tab, where you can
    select them again to **Restore** or **Delete forever** —
-   one by one or many at once. Deleting forever cannot be undone.
+   one by one or many at once — or **Empty trash**. Deleting forever cannot be
+   undone.
 
 ### Keyboard shortcuts
 
 `1`–`5` rating · `F` favorite · `←` / `→` previous / next in the details panel ·
 `Esc` close. Shortcuts are ignored while typing in a text field; without an
-open details panel they apply to the card under the mouse.
+open details panel they apply to the card under the mouse. Review mode has its
+own keys (see *Import* above; they are also shown at the bottom of the review
+screen).
 
 ---
 
@@ -146,10 +172,37 @@ Settings live in `config.json` in the program folder (created by `setup.bat`):
 | `platforms` | Platforms shown in upload tracking |
 | `kinds` | Kinds offered in the dropdowns (add your own here) |
 | `ffmpeg`, `ffprobe` | Optional full paths if they are not on `PATH` / in `C:\ffmpeg\bin` |
+| `watch_folders` | Extra folders to import from automatically, see below (default: none) |
 
 Restart genvault after editing. You can run a second, separate instance
 (e.g. for testing) by copying the program folder and giving it its own
 `library_root` and `port`.
+
+### Watch folders
+
+genvault can watch other folders the same way as `drop\` — typically your
+ComfyUI output folder. Add them to `config.json` (use forward slashes or double
+backslashes) and restart genvault:
+
+```json
+"watch_folders": [
+  "D:/ComfyUI/output",
+  { "path": "E:/renders", "skip_companion_png": false }
+]
+```
+
+- New files are **moved** into the Inbox as soon as they are completely
+  written — no copies, so the folder empties itself and nothing exists twice.
+  Subfolders are included; the folder structure itself is left alone.
+- **Files that are already in the folder when you add it are not touched.**
+  The Inbox shows how many there are, with **Import all** (moves them in the
+  background, with progress and **Stop**) and **Ignore**.
+- `skip_companion_png` (default `true`): Video Combine saves a first-frame PNG
+  next to every video. A PNG with the same name as a video beside it is left in
+  the folder instead of being imported.
+- A watch folder must not be inside the library (or contain it).
+- ComfyUI's own history/queue previews can no longer show files after genvault
+  has moved them.
 
 ### Library layout
 
@@ -161,7 +214,7 @@ Restart genvault after editing. You can run a second, separate instance
 ├── .trash\                     deleted files (restorable)
 ├── .derivatives\               thumbnails
 ├── .sidecars\                  one JSON per file — the database can be rebuilt from these
-├── .config\watermark.png       release watermark
+├── .config\                    release watermark, watch-folder state
 ├── backups\                    backup zips (Backup button)
 └── genvault.db
 ```
@@ -203,7 +256,7 @@ logo and what you were doing.
 - `backend\` — `config.py` (settings, version), `db.py` (SQLite, auto-migration,
   rebuild from sidecars), `parser.py` (metadata), `media.py` (thumbnails),
   `library.py` (import, filing, trash, backup), `fsutil.py` (Windows-safe file
-  moves), `watcher.py` (drop folder), `render.py` (release module), `main.py`
+  moves), `watcher.py` (drop + watch folders), `render.py` (release module), `main.py`
   (HTTP API). `web\` holds the frontend; `tray.py` is the tray launcher.
 - Media is served with HTTP range support and share-delete file handles, so a
   file can be filed or deleted while it is playing in a preview.

@@ -67,10 +67,16 @@ def _haystack(a: dict) -> str:
     return " ".join(str(p) for p in parts if p).lower()
 
 
+NO_SUB = "__none__"     # sub_project filter value: files directly in the project
+
+
 def _matches(a: dict, q: str | None, f: dict) -> bool:
     if f.get("project") and (a.get("project") or "") != f["project"]:
         return False
-    if f.get("sub_project") and (a.get("sub_project") or "") != f["sub_project"]:
+    if f.get("sub_project") == NO_SUB:
+        if a.get("sub_project"):
+            return False
+    elif f.get("sub_project") and (a.get("sub_project") or "") != f["sub_project"]:
         return False
     if f.get("kind") and (a.get("kind") or "") != f["kind"]:
         return False
@@ -254,6 +260,8 @@ def move_bulk(body: dict = Body(...)):
     """Library bulk move: apply the same project/sub_project/kind patch to
     many assets. Per-file errors are reported instead of failing the batch."""
     patch = {k: body[k] for k in ("project", "sub_project", "kind") if body.get(k)}
+    if body.get("clear_sub_project"):
+        patch["sub_project"] = None          # move out of the sub-project
     if not patch:
         raise HTTPException(400, "set a project, sub-project or kind first")
     done, errors = [], []
@@ -300,6 +308,43 @@ def rename_project(body: dict = Body(...)):
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"renamed": len(r["renamed"]), "errors": r["errors"]}
+
+
+@app.post("/api/projects/rename-sub")
+def rename_sub_project(body: dict = Body(...)):
+    try:
+        r = library.rename_sub_project(body.get("project", ""), body.get("old", ""), body.get("new", ""))
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"renamed": len(r["renamed"]), "errors": r["errors"]}
+
+
+@app.post("/api/trash/empty")
+def empty_trash():
+    return library.empty_trash()
+
+
+# ---- watch folders ---------------------------------------------------------------
+
+
+@app.get("/api/watch")
+def watch_status():
+    return {"folders": watcher.status()}
+
+
+@app.post("/api/watch/{action}")
+def watch_action(action: str, body: dict = Body(...)):
+    fn = {"import": watcher.import_backlog, "stop": watcher.stop_backlog,
+          "dismiss": watcher.dismiss_backlog}.get(action)
+    if not fn:
+        raise HTTPException(404, f"unknown action: {action}")
+    try:
+        fn(str(body.get("key") or ""))
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    return {"folders": watcher.status()}
 
 
 @app.post("/api/assets/file-bulk")

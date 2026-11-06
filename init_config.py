@@ -17,6 +17,7 @@ DEFAULTS = {
     "kinds": ["clip", "image", "sound", "release", "pre-release", "recipe"],
     "ffmpeg": "",
     "ffprobe": "",
+    "watch_folders": [],
 }
 
 
