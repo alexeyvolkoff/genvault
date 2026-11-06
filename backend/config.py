@@ -6,10 +6,11 @@ fully owned by the app; the user never has to maintain its structure.
 """
 from __future__ import annotations
 
-import json
 import os
 import shutil
 from pathlib import Path
+
+from .cfgfile import ConfigError, add_missing, read as read_config_file  # noqa: F401  (ConfigError re-exported)
 
 APP_DIR = Path(__file__).resolve().parent      # .../backend
 PROJECT_DIR = APP_DIR.parent                   # app root (program folder)
@@ -33,11 +34,15 @@ DEFAULTS = {
 
 def _load() -> dict:
     cfg = dict(DEFAULTS)
-    if CONFIG_FILE.exists():
-        try:
-            cfg.update(json.loads(CONFIG_FILE.read_text(encoding="utf-8")))
-        except Exception:
-            pass
+    # a broken config.json raises ConfigError — never fall back to the default
+    # library silently (serve.py reports it, the tray shows it)
+    cfg.update(read_config_file(CONFIG_FILE))
+    # settings added in newer versions appear in the user's file, ready to fill in
+    try:
+        for key in add_missing(CONFIG_FILE, {"watch_folders": []}):
+            print(f"[config] added \"{key}\" to {CONFIG_FILE.name}")
+    except (OSError, ConfigError):
+        pass                                   # read-only folder etc. — not important
     if os.environ.get("GENVAULT_ROOT"):
         cfg["library_root"] = os.environ["GENVAULT_ROOT"]
     if os.environ.get("GENVAULT_PORT"):

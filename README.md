@@ -163,46 +163,101 @@ are never touched; database changes migrate automatically on start.
 
 ## Configuration
 
-Settings live in `config.json` in the program folder (created by `setup.bat`):
+All settings are in the file **`config.json`** in the program folder (the
+folder with `setup.bat`). To change them:
 
-| Key | Meaning |
+1. Right-click the genvault tray icon → **Edit config.json** (opens Notepad).
+2. Change the value, save (Ctrl+S).
+3. Tray icon → **Restart server**.
+
+A complete `config.json` looks like this:
+
+```
+{
+  "library_root": "D:\genvault-library",
+  "port": 8077,
+  "platforms": ["X", "Civitai", "Reddit"],
+  "kinds": ["clip", "image", "sound", "release", "pre-release", "recipe"],
+  "ffmpeg": "",
+  "ffprobe": "",
+  "watch_folders": []
+}
+```
+
+| Setting | What it does |
 |---|---|
 | `library_root` | Folder that holds your media, database and thumbnails |
 | `port` | Local web port (default `8077`) |
 | `platforms` | Platforms shown in upload tracking |
 | `kinds` | Kinds offered in the dropdowns (add your own here) |
-| `ffmpeg`, `ffprobe` | Optional full paths if they are not on `PATH` / in `C:\ffmpeg\bin` |
-| `watch_folders` | Extra folders to import from automatically, see below (default: none) |
+| `ffmpeg`, `ffprobe` | Full paths to ffmpeg / ffprobe — only needed if they are not on `PATH` or in `C:\ffmpeg\bin` |
+| `watch_folders` | Folders genvault imports new files from automatically, e.g. your ComfyUI output folder — see [Watch folders](#watch-folders) |
 
-Restart genvault after editing. You can run a second, separate instance
-(e.g. for testing) by copying the program folder and giving it its own
-`library_root` and `port`.
+**Editing tips**
+
+- Only change what is between the quotes `"…"` or the brackets `[…]`.
+- Every line ends with a comma — except the last one before the closing `}`.
+- Paths can be pasted straight from the Explorer address bar
+  (`D:\ComfyUI\output`); forward slashes (`D:/ComfyUI/output`) work too.
+- Made a mistake? genvault then **does not start** and the tray icon shows a
+  message with the line number. Your library is not affected — fix the line
+  and use **Restart server**.
+
+You can run a second, separate instance (e.g. for testing) by copying the
+program folder and giving it its own `library_root` and `port`.
 
 ### Watch folders
 
-genvault can watch other folders the same way as `drop\` — typically your
-ComfyUI output folder. Add them to `config.json` (use forward slashes or double
-backslashes) and restart genvault:
+genvault can pick up your renders automatically: add the folder your
+generator saves into (for ComfyUI: its `output` folder) as a *watch folder*.
+Every new file there is then moved into the genvault Inbox.
 
-```json
-"watch_folders": [
-  "D:/ComfyUI/output",
-  { "path": "E:/renders", "skip_companion_png": false }
-]
-```
+**Set it up**
+
+1. Open your ComfyUI `output` folder in Explorer, click into the address bar
+   and copy the path (Ctrl+C), e.g. `D:\ComfyUI\output`.
+   (Portable ComfyUI: `…\ComfyUI_windows_portable\ComfyUI\output`.)
+2. Tray icon → **Edit config.json**. Near the end there is this line:
+
+   ```
+   "watch_folders": []
+   ```
+
+3. Put the path **in quotes** between the brackets:
+
+   ```
+   "watch_folders": ["D:\ComfyUI\output"]
+   ```
+
+   Several folders are separated by commas:
+   `"watch_folders": ["D:\ComfyUI\output", "E:\renders"]`
+4. Save, then tray icon → **Restart server**.
+5. Open the **Inbox**. If the path is wrong, a yellow note says so. If the
+   folder already contains files, a banner shows how many (see below).
+   Render something — it appears in the Inbox a few seconds after ComfyUI has
+   finished saving it.
+
+(The `watch_folders` line is added to `config.json` automatically when
+genvault 2.5.0 or newer starts for the first time.)
+
+**What happens to the files**
 
 - New files are **moved** into the Inbox as soon as they are completely
   written — no copies, so the folder empties itself and nothing exists twice.
   Subfolders are included; the folder structure itself is left alone.
-- **Files that are already in the folder when you add it are not touched.**
-  The Inbox shows how many there are, with **Import all** (moves them in the
-  background, with progress and **Stop**) and **Ignore**.
-- `skip_companion_png` (default `true`): Video Combine saves a first-frame PNG
-  next to every video. A PNG with the same name as a video beside it is left in
-  the folder instead of being imported.
-- A watch folder must not be inside the library (or contain it).
-- ComfyUI's own history/queue previews can no longer show files after genvault
-  has moved them.
+- **Files that were already in the folder are not touched.** The Inbox shows
+  how many there are, with **Import all** (moves them in the background, with
+  progress and **Stop**) and **Ignore**.
+- Video Combine saves a first-frame PNG next to every video. Such a PNG (same
+  name as a video next to it) stays in the folder instead of being imported.
+- ComfyUI's own history/queue previews can no longer show files after
+  genvault has moved them.
+- To stop watching a folder, remove it from the brackets and restart.
+  Files that were already imported stay in genvault.
+
+Advanced: to import those first-frame PNGs as well, write the folder as
+`{ "path": "D:\ComfyUI\output", "skip_companion_png": false }` instead of just
+the path. A watch folder must not be inside the genvault library (or contain it).
 
 ### Library layout
 
@@ -228,6 +283,10 @@ and shown in the app.
 
 - **Page doesn't load** — is the tray icon green? Check `logs\server.log` in the
   program folder.
+- **Tray says "config.json has an error"** — a typo in `config.json` (usually
+  a missing or extra comma). The message names the line. Tray icon →
+  **Edit config.json**, fix it, then **Restart server**. Your library is not
+  affected.
 - **No thumbnails / no video info** — ffmpeg isn't found (see Requirements).
 - **"File is in use by another program"** — another app (player, editor) has
   the file open. Close it and try again.

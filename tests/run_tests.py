@@ -90,7 +90,12 @@ def main() -> int:
     media = work / "media"
     subprocess.run([sys.executable, str(TESTS / "make_test_media.py"), str(media)], env=env, check=True,
                    stdout=subprocess.DEVNULL)
-    results = {name: run_suite(name, media, work, env) for name in SUITES}
+    results = {}
+    if not os.environ.get("GV_ONLY") or os.environ["GV_ONLY"] == "config_checks.py":
+        print("\n=== config_checks.py ===", flush=True)      # no server needed
+        results["config_checks.py"] = subprocess.run(
+            [sys.executable, str(TESTS / "config_checks.py")], cwd=TESTS, env=env).returncode == 0
+    results.update({name: run_suite(name, media, work, env) for name in SUITES})
     print("\n=== summary ===")
     for name, ok in results.items():
         print(f"{'OK  ' if ok else 'FAIL'} {name}")

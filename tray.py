@@ -7,7 +7,6 @@ via genvault-tray.bat (pythonw).
 """
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import threading
@@ -20,23 +19,37 @@ import pystray
 from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parent
+from backend.cfgfile import ConfigError, read as read_config_file  # noqa: E402  (no side effects)
 PY = ROOT / ".venv" / "Scripts" / "python.exe"
 SERVE = ROOT / "serve.py"
 LOG_DIR = ROOT / "logs"
 CREATE_NO_WINDOW = 0x08000000
 
 
+CONFIG = ROOT / "config.json"
+_config_error: str | None = None
+PORT, URL, HEALTH = 8077, "", ""
+
+
 def _read_config() -> dict:
+    """Reads config.json and (re)sets PORT/URL; a broken file is remembered in
+    _config_error so the server is not started with the default library."""
+    global _config_error, PORT, URL, HEALTH
     try:
-        return json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+        cfg = read_config_file(CONFIG)
+        _config_error = None
+    except ConfigError as e:
+        cfg, _config_error = {}, str(e)
+    try:
+        PORT = int(cfg.get("port", 8077))
+    except (TypeError, ValueError):
+        PORT = 8077
+    URL = f"http://127.0.0.1:{PORT}"
+    HEALTH = URL + "/api/health"
+    return cfg
 
 
-_CFG = _read_config()
-PORT = int(_CFG.get("port", 8077))
-URL = f"http://127.0.0.1:{PORT}"
-HEALTH = URL + "/api/health"
+_read_config()
 
 _proc: subprocess.Popen | None = None
 _up = False
@@ -60,6 +73,9 @@ def _health() -> bool:
 
 def _start_server():
     global _proc
+    _read_config()
+    if _config_error:
+        return
     if _health():            # something already serving — don't double-start
         return
     if _proc and _proc.poll() is None:
@@ -97,6 +113,22 @@ def _open_library(icon, item):
 def _restart(icon, item):
     _stop_server()
     _start_server()
+    _report_config(icon)
+
+
+def _edit_config(icon, item):
+    subprocess.Popen(["notepad.exe", str(CONFIG)])
+
+
+def _report_config(icon):
+    if _config_error:
+        icon.icon = _icon(False)
+        icon.title = "genvault — not started: config.json has an error"
+        try:
+            icon.notify(_config_error.split("\n")[0] + "\nFix it via the tray menu → Edit config.json, then Restart server.",
+                        "genvault did not start")
+        except Exception:
+            pass
 
 
 def _quit(icon, item):
@@ -106,7 +138,11 @@ def _quit(icon, item):
 
 def _monitor(icon):
     global _up
+    _report_config(icon)
     while True:
+        if _config_error:
+            time.sleep(2)
+            continue
         up = _health()
         if up != _up:
             _up = up
@@ -123,6 +159,7 @@ def main():
             pystray.MenuItem("Open genvault", _open, default=True),
             pystray.MenuItem("Restart server", _restart),
             pystray.MenuItem("Open library folder", _open_library),
+            pystray.MenuItem("Edit config.json", _edit_config),
             pystray.MenuItem("Quit", _quit),
         ),
     )

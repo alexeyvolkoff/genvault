@@ -36,6 +36,17 @@
   **Esc** exit. Small icons in the top right corner show whether loop, sound
   and videos-only are on; these settings are remembered. There is no delete key
   in the player on purpose.
+- **Safer config.json.** A typo in `config.json` used to be ignored silently:
+  genvault then started with an empty default library, which looked as if all
+  files were gone. Now genvault does not start, and the tray icon shows a
+  message with the line number (the library is never touched). Running
+  `setup.bat` no longer overwrites a config.json it cannot read.
+  - Windows paths can be pasted as they are (`D:\ComfyUI\output`), single
+    backslashes are accepted.
+  - New tray menu entry **Edit config.json** (opens it in Notepad).
+  - Settings introduced by a new version are added to an existing config.json
+    automatically (2.5.0: an empty `"watch_folders": []`), so you only have to
+    fill them in — the rest of the file is left exactly as it is.
 - **Empty trash** button in the Trash view (shows the number of files and asks
   before deleting them forever).
 - **Project tree in the sidebar.** Projects can be expanded to show their

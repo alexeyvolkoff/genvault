@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT))
+from backend.cfgfile import ConfigError, read  # noqa: E402
 CONFIG = ROOT / "config.json"
 
 DEFAULTS = {
@@ -23,11 +25,12 @@ DEFAULTS = {
 
 def main() -> None:
     cfg = dict(DEFAULTS)
-    if CONFIG.exists():
-        try:
-            cfg.update(json.loads(CONFIG.read_text(encoding="utf-8")))
-        except Exception:
-            pass
+    try:
+        cfg.update(read(CONFIG))
+    except ConfigError as e:
+        # never overwrite a config.json we cannot read — it holds the user's settings
+        print(f"ERROR: {e}\nPlease fix config.json (or delete it to start over) and run setup again.")
+        sys.exit(1)
     if len(sys.argv) > 1 and sys.argv[1].strip():
         cfg["library_root"] = str(Path(sys.argv[1].strip().strip('"')))
     if len(sys.argv) > 2 and sys.argv[2].strip():
