@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.5.1 — 2026-11-08
+
+- **Fix: watch folders take a file only when it is really finished.** Every
+  change in the folder starts a check right away, so two checks a few
+  milliseconds apart could already count a file as "complete". A file now also
+  has to stay unchanged for 3 seconds before it is moved.
+- **Fix: a Video Combine PNG that appears after its video is skipped too.**
+  Before, it was only recognized while the video was still next to it.
+
 ## 2.5.0 — 2026-11-06
 
 - **Watch folders (optional).** List extra folders in `config.json` under

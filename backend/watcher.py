@@ -34,13 +34,17 @@ from . import config, library
 SCAN_INTERVAL = 4.0          # fallback scan cadence in seconds
 IGNORE_SUFFIXES = (".part", ".crdownload", ".tmp", ".partial")
 COMPANION_GRACE = 15.0       # a PNG waits this long for its video to appear
+STABLE_AGE = 3.0             # a file must keep its size this long before it is moved
+RECENT_VIDEO_TTL = 600.0     # remember imported videos this long (late companion PNGs)
 BACKLOG_SLICE = 3.0          # seconds of backlog import per loop (new renders keep flowing)
 
 _wake = threading.Event()
 _started = False
 _observer: Observer | None = None
 _scheduled: set[str] = set()
-_last_seen: dict[str, tuple[int, int]] = {}      # path -> (size, mtime_ns) of the previous scan
+# path -> (size, mtime_ns, monotonic time since when it has been unchanged)
+_last_seen: dict[str, tuple[int, int, float]] = {}
+_recent_videos: dict[tuple[str, str], float] = {}  # (folder, stem) of just-imported videos
 _state_lock = threading.Lock()
 _state: dict = {"folders": {}, "skip": []}
 _skip: set[str] = set()
@@ -164,7 +168,11 @@ def _video_stems(files) -> set[tuple[str, str]]:
 
 
 def _is_companion(p: Path, stems: set) -> bool:
-    return p.suffix.lower() == ".png" and (_key(p.parent), p.stem.lower()) in stems
+    if p.suffix.lower() != ".png":
+        return False
+    k = (_key(p.parent), p.stem.lower())
+    # also when the video was already moved before the PNG appeared
+    return k in stems or time.monotonic() - _recent_videos.get(k, -1e9) < RECENT_VIDEO_TTL
 
 
 def _mark_skip(p: Path) -> None:
@@ -181,6 +189,11 @@ def _import(p: Path, src: dict, stems: set) -> bool:
         png = p.with_name(stem + ".png")
         if png.exists():
             _mark_skip(png)
+        now = time.monotonic()
+        _recent_videos[(_key(p.parent), stem.lower())] = now
+        for k, t in list(_recent_videos.items()):
+            if now - t > RECENT_VIDEO_TTL:
+                del _recent_videos[k]
     asset = library.intake(p, hint=_hint_for(p, src), move=True)
     if not asset:
         print(f"[watcher] unsupported file type, leaving it: {p.name}")
@@ -251,9 +264,13 @@ def _scan_source(src: dict, seen: dict) -> int:
         if not src["drop"] and mtime < since:
             backlog.append((p, size))
             continue
-        seen[str(p)] = (size, mtime)
-        if _last_seen.get(str(p)) != (size, mtime):
-            continue                                  # new or still growing
+        prev = _last_seen.get(str(p))
+        unchanged_since = prev[2] if prev and prev[:2] == (size, mtime) else time.monotonic()
+        seen[str(p)] = (size, mtime, unchanged_since)
+        # change events wake the scan within milliseconds — two scans alone don't
+        # prove a file is finished, so it must also be unchanged for STABLE_AGE
+        if time.monotonic() - unchanged_since < STABLE_AGE:
+            continue                                  # new or still being written
         if (src["skip_companion_png"] and p.suffix.lower() == ".png"
                 and now_ns - mtime < COMPANION_GRACE * 1e9):
             continue                                  # its video may not exist yet

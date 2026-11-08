@@ -53,6 +53,8 @@ sub.mkdir(parents=True)
 shutil.copy(MEDIA / "test image 3.png", sub / "render_00001.png")     # copy(): fresh mtime, like a new render
 shutil.copy(MEDIA / "test clip 3.mp4", sub / "render_00001.mp4")
 shutil.copy(MEDIA / "test image 4.png", WATCH / "single_00001.png")    # an image without a video
+shutil.copy(MEDIA / "test clip 4.mp4", sub / "late_00002.mp4")         # its PNG arrives only later
+t_copy = time.time()
 
 ok = wait_for(lambda: "render_00001.mp4" in inbox_by_name())
 check("new render moved into the inbox", ok and not (sub / "render_00001.mp4").exists())
@@ -60,12 +62,17 @@ a = inbox_by_name().get("render_00001.mp4") or {}
 check("source hint names the watch folder + subfolder", a.get("source_hint") == f"watch: {WATCH.name}/wan/day1", a.get("source_hint"))
 check("file is in the inbox on disk", a and (LIB / a["rel_path"]).exists())
 check("ComfyUI metadata parsed", (a.get("meta") or {}).get("positive_prompt", "").startswith("a test pattern"))
+ok = wait_for(lambda: "late_00002.mp4" in inbox_by_name())
+check("a file is only moved after it stayed unchanged for a few seconds", ok and time.time() - t_copy >= 3)
+shutil.copy(MEDIA / "test image 1.png", sub / "late_00002.png")         # after its video is gone
 
 ok = wait_for(lambda: "single_00001.png" in inbox_by_name())
 check("a lone PNG is imported (after the companion grace period)", ok)
 time.sleep(5)
 check("the companion PNG stays in the watch folder", (sub / "render_00001.png").exists()
       and "render_00001.png" not in inbox_by_name())
+check("a companion PNG that arrives after its video also stays", (sub / "late_00002.png").exists()
+      and "late_00002.png" not in inbox_by_name())
 check("watch folder structure is kept", sub.is_dir())
 state = (LIB / ".config" / "watch-state.json").read_text(encoding="utf-8")
 check("companion PNG is remembered across restarts", "render_00001.png" in state)
