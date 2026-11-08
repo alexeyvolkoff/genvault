@@ -47,6 +47,8 @@
   - Settings introduced by a new version are added to an existing config.json
     automatically (2.5.0: an empty `"watch_folders": []`), so you only have to
     fill them in — the rest of the file is left exactly as it is.
+- README: new *Contributing* section — bug reports and ideas welcome, no
+  feature or platform pull requests, forks welcome.
 - **Empty trash** button in the Trash view (shows the number of files and asks
   before deleting them forever).
 - **Project tree in the sidebar.** Projects can be expanded to show their

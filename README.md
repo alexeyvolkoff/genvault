@@ -353,6 +353,22 @@ Release checklist: bump `APP_VERSION` in `backend\config.py`, add a
 
 ---
 
+## Contributing
+
+genvault is a personal side project: a local media app for Windows, developed
+at my own pace.
+
+- **Bug reports and ideas are welcome** — open an issue on GitHub (please
+  include the version number and what you were doing).
+- **I don't accept pull requests for new features or other platforms**
+  (macOS, Linux, integrations into other software). I can only maintain and
+  test what I use myself.
+- **Forks are welcome.** genvault is MIT-licensed — you may adapt it, port it
+  or build it into your own project without asking. Please make clear that
+  your version is a separate, independently maintained project.
+
+---
+
 ## License
 
 genvault is released under the [MIT License](LICENSE) — © 2026 fatberg_slim.
