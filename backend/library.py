@@ -381,21 +381,30 @@ def purge_asset(asset_id: int) -> None:
 
 
 def open_in_explorer(asset_id: int) -> str:
-    """Open the containing folder in Windows Explorer with the file selected.
-    The path always comes live from the DB, never from a cache."""
+    """Open the containing folder in the OS file manager (selecting the file on
+    Windows Explorer and macOS Finder). The path always comes live from the DB,
+    never from a cache."""
     asset = db.get(asset_id)
     if not asset:
         raise LookupError(f"asset {asset_id} not found")
     path = abs_path(asset)
-    # explorer needs the raw command line: with the list form Python quotes
-    # the whole "/select,<path>" token as soon as the path contains spaces,
-    # explorer fails to parse it and silently opens the Documents folder.
-    if path.exists():
-        subprocess.Popen(f'explorer /select,"{path}"')
-    elif path.parent.exists():
-        subprocess.Popen(f'explorer "{path.parent}"')
-    else:
+    if not path.exists() and not path.parent.exists():
         raise FileNotFoundError(str(path))
+    if sys.platform == "win32":
+        # explorer needs the raw command line: with the list form Python quotes
+        # the whole "/select,<path>" token as soon as the path contains spaces,
+        # explorer fails to parse it and silently opens the Documents folder.
+        if path.exists():
+            subprocess.Popen(f'explorer /select,"{path}"')
+        else:
+            subprocess.Popen(f'explorer "{path.parent}"')
+    elif sys.platform == "darwin":
+        if path.exists():
+            subprocess.Popen(["open", "-R", str(path)])
+        else:
+            subprocess.Popen(["open", str(path.parent)])
+    else:
+        subprocess.Popen(["xdg-open", str(path.parent)])
     return str(path)
 
 

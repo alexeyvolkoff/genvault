@@ -2,28 +2,32 @@
 
 Runs the server as a child process (output -> logs/server.log, no console
 window) and shows a tray icon that reflects real health: green when the
-server answers, gray while it's down/starting. Launched without a console
-via genvault-tray.bat (pythonw).
+server answers, gray while it's down/starting. Launched via genvault-tray.bat
+(Windows) or genvault-tray.command (macOS / Linux).
 """
 from __future__ import annotations
 
 import json
 import os
 import subprocess
+import sys
 import threading
 import time
 import urllib.request
 import webbrowser
 from pathlib import Path
 
-import pystray
 from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parent
-PY = ROOT / ".venv" / "Scripts" / "python.exe"
+if sys.platform == "win32":
+    _venv_py = ROOT / ".venv" / "Scripts" / "python.exe"
+else:
+    _venv_py = ROOT / ".venv" / "bin" / "python"
+PY = _venv_py if _venv_py.exists() else Path(sys.executable)
 SERVE = ROOT / "serve.py"
 LOG_DIR = ROOT / "logs"
-CREATE_NO_WINDOW = 0x08000000
+CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
 
 def _read_config() -> dict:
@@ -90,8 +94,17 @@ def _open(icon, item):
 
 def _open_library(icon, item):
     root = _read_config().get("library_root")
-    if root and Path(os.path.expandvars(os.path.expanduser(root))).exists():
-        os.startfile(os.path.expandvars(os.path.expanduser(root)))
+    if not root:
+        return
+    expanded = os.path.expandvars(os.path.expanduser(root))
+    if not Path(expanded).exists():
+        return
+    if sys.platform == "win32":
+        os.startfile(expanded)
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", expanded])
+    else:
+        subprocess.Popen(["xdg-open", expanded])
 
 
 def _restart(icon, item):
@@ -116,6 +129,11 @@ def _monitor(icon):
 
 
 def main():
+    if sys.platform.startswith("linux") and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        print(f"[genvault] No GUI display detected — running server in foreground at {URL}")
+        os.execv(str(PY), [str(PY), str(SERVE)])
+
+    import pystray
     _start_server()
     icon = pystray.Icon(
         "genvault", _icon(False), "genvault — starting…",
