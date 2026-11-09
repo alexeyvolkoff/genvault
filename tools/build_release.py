@@ -8,12 +8,14 @@ forward-slash paths, so it unpacks cleanly with Windows, 7-Zip and update.bat.
 """
 import re
 import sys
+import time
 import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 EXCLUDE_DIRS = {".venv", "venv", "logs", "__pycache__", ".git", "tests", "tools", ".vscode", ".idea"}
 EXCLUDE_FILES = {"config.json", ".gitignore", ".gitattributes"}
+EXEC_SUFFIXES = {".command", ".sh"}
 
 
 def main() -> None:
@@ -29,7 +31,19 @@ def main() -> None:
                 continue
             if rel.name in EXCLUDE_FILES or p.suffix in (".pyc", ".zip"):
                 continue
-            z.write(p, "genvault/" + rel.as_posix())
+            arcname = "genvault/" + rel.as_posix()
+            if p.suffix.lower() in EXEC_SUFFIXES:
+                # Preserve +x bits even when the zip is built on Windows so
+                # macOS Finder can double-click *.command straight after unzip.
+                st = p.stat()
+                zi = zipfile.ZipInfo(arcname, time.localtime(st.st_mtime)[:6])
+                zi.compress_type = zipfile.ZIP_DEFLATED
+                zi.create_system = 3   # Unix
+                zi.external_attr = (0o100755 & 0xFFFF) << 16
+                data = p.read_bytes().replace(b"\r\n", b"\n")
+                z.writestr(zi, data)
+            else:
+                z.write(p, arcname)
             count += 1
     print(f"{out}  ({count} files, {out.stat().st_size // 1024} KB)")
 

@@ -32,7 +32,7 @@ def main() -> None:
         print(f"ERROR: {e}\nPlease fix config.json (or delete it to start over) and run setup again.")
         sys.exit(1)
     if len(sys.argv) > 1 and sys.argv[1].strip():
-        cfg["library_root"] = str(Path(sys.argv[1].strip().strip('"')))
+        cfg["library_root"] = str(Path(sys.argv[1].strip().strip('"')).expanduser())
     if len(sys.argv) > 2 and sys.argv[2].strip():
         try:
             cfg["port"] = int(sys.argv[2])

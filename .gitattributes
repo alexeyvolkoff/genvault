@@ -1,6 +1,8 @@
 # Normalize text files; batch files MUST keep CRLF or cmd.exe misreads them.
 * text=auto
 *.bat text eol=crlf
+*.command text eol=lf
+*.sh text eol=lf
 *.png binary
 *.jpg binary
 *.mp4 binary

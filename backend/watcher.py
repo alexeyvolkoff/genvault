@@ -113,9 +113,14 @@ def _problem(path: Path) -> str | None:
 
 
 def _sources() -> list[dict]:
-    src = [{"path": config.DROP_DIR, "drop": True, "skip_companion_png": False}]
+    src = [{"path": config.DROP_DIR, "drop": True, "skip_companion_png": False, "keep_source": False}]
     for w in config.WATCH_FOLDERS:
-        src.append({"path": w["path"], "drop": False, "skip_companion_png": w["skip_companion_png"]})
+        src.append({
+            "path": w["path"],
+            "drop": False,
+            "skip_companion_png": w["skip_companion_png"],
+            "keep_source": bool(w.get("keep_source", False)),
+        })
     return src
 
 
@@ -194,9 +199,12 @@ def _import(p: Path, src: dict, stems: set) -> bool:
         for k, t in list(_recent_videos.items()):
             if now - t > RECENT_VIDEO_TTL:
                 del _recent_videos[k]
-    asset = library.intake(p, hint=_hint_for(p, src), move=True)
+    keep_source = bool(src.get("keep_source", False))
+    asset = library.intake(p, hint=_hint_for(p, src), move=not keep_source, hardlink=keep_source)
     if not asset:
         print(f"[watcher] unsupported file type, leaving it: {p.name}")
+    elif keep_source:
+        _mark_skip(p)
     return bool(asset)
 
 
@@ -230,7 +238,11 @@ def _scan_source(src: dict, seen: dict) -> int:
     st = None
     if not src["drop"]:
         st = _status.setdefault(k, {})
-        st.update({"path": str(root), "skip_companion_png": src["skip_companion_png"]})
+        st.update({
+            "path": str(root),
+            "skip_companion_png": src["skip_companion_png"],
+            "keep_source": bool(src.get("keep_source", False)),
+        })
         problem = _problem(root)
         if problem or not root.is_dir():
             st.update({"ok": False, "error": problem or "folder not found",
@@ -289,9 +301,9 @@ def _scan_source(src: dict, seen: dict) -> int:
         job = _backlog_jobs.get(k)
         if job is not None:
             imported += _import_backlog_slice(backlog, src, stems, job)
-            st["backlog_count"] = sum(1 for p, _ in backlog if p.exists())
-            st["backlog_bytes"] = sum(s for p, s in backlog if p.exists())
-            if not any(p.exists() and _key(p) not in job["failed_paths"] for p, _ in backlog):
+            st["backlog_count"] = sum(1 for p, _ in backlog if p.exists() and _key(p) not in _skip)
+            st["backlog_bytes"] = sum(s for p, s in backlog if p.exists() and _key(p) not in _skip)
+            if not any(p.exists() and _key(p) not in _skip and _key(p) not in job["failed_paths"] for p, _ in backlog):
                 job["finished"] = True
             if job.get("finished"):
                 _backlog_jobs.pop(k, None)
@@ -311,7 +323,7 @@ def _import_backlog_slice(backlog, src, stems, job) -> int:
         if time.monotonic() - t0 > BACKLOG_SLICE or job.get("stop"):
             break
         pk = _key(p)
-        if pk in job["failed_paths"] or not p.exists():
+        if pk in _skip or pk in job["failed_paths"] or not p.exists():
             continue
         try:
             if _import(p, src, stems):

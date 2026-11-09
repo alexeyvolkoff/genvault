@@ -85,7 +85,7 @@ def _saved(asset_id: int) -> dict:
 
 
 def intake(src: Path, original_name: str | None = None, hint: str | None = None,
-           move: bool = True) -> dict | None:
+           move: bool = True, hardlink: bool = False) -> dict | None:
     """Bring a new file into the inbox. Returns the asset, or None if the
     extension is unsupported. Never derives project/kind from anything."""
     original = original_name or src.name
@@ -111,6 +111,11 @@ def intake(src: Path, original_name: str | None = None, hint: str | None = None,
     try:
         if move:
             fsutil.move(src, dest)
+        elif hardlink:
+            try:
+                os.link(str(src), str(dest))
+            except OSError:
+                shutil.copy2(str(src), str(dest))
         else:
             shutil.copy2(str(src), str(dest))
     except Exception:
@@ -455,21 +460,30 @@ def empty_trash() -> dict:
 
 
 def open_in_explorer(asset_id: int) -> str:
-    """Open the containing folder in Windows Explorer with the file selected.
-    The path always comes live from the DB, never from a cache."""
+    """Open the containing folder in the OS file manager (selecting the file on
+    Windows Explorer and macOS Finder). The path always comes live from the DB,
+    never from a cache."""
     asset = db.get(asset_id)
     if not asset:
         raise LookupError(f"asset {asset_id} not found")
     path = abs_path(asset)
-    # explorer needs the raw command line: with the list form Python quotes
-    # the whole "/select,<path>" token as soon as the path contains spaces,
-    # explorer fails to parse it and silently opens the Documents folder.
-    if path.exists():
-        subprocess.Popen(f'explorer /select,"{path}"')
-    elif path.parent.exists():
-        subprocess.Popen(f'explorer "{path.parent}"')
-    else:
+    if not path.exists() and not path.parent.exists():
         raise FileNotFoundError(str(path))
+    if sys.platform == "win32":
+        # explorer needs the raw command line: with the list form Python quotes
+        # the whole "/select,<path>" token as soon as the path contains spaces,
+        # explorer fails to parse it and silently opens the Documents folder.
+        if path.exists():
+            subprocess.Popen(f'explorer /select,"{path}"')
+        else:
+            subprocess.Popen(f'explorer "{path.parent}"')
+    elif sys.platform == "darwin":
+        if path.exists():
+            subprocess.Popen(["open", "-R", str(path)])
+        else:
+            subprocess.Popen(["open", str(path.parent)])
+    else:
+        subprocess.Popen(["xdg-open", str(path.parent)])
     return str(path)
 
 

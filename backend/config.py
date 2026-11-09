@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 from pathlib import Path
 
 from .cfgfile import ConfigError, add_missing, read as read_config_file  # noqa: F401  (ConfigError re-exported)
@@ -77,6 +78,7 @@ def _watch_folders(raw) -> list[dict]:
         out.append({
             "path": Path(os.path.expandvars(os.path.expanduser(str(entry["path"]).strip()))),
             "skip_companion_png": bool(entry.get("skip_companion_png", True)),
+            "keep_source": bool(entry.get("keep_source", False)),
         })
     return out
 
@@ -94,9 +96,21 @@ def _find_tool(name: str, override: str) -> str:
     found = shutil.which(name)
     if found:
         return found
-    fallback = Path("C:/ffmpeg/bin") / (name + ".exe")
-    if fallback.exists():
-        return str(fallback)
+    if sys.platform == "win32":
+        candidates = [
+            Path("C:/ffmpeg/bin") / (name + ".exe"),
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft/WinGet/Links" / (name + ".exe"),
+        ]
+    else:
+        # macOS GUI / Finder launches have a minimal PATH without Homebrew
+        candidates = [
+            Path("/opt/homebrew/bin") / name,
+            Path("/usr/local/bin") / name,
+            Path("/opt/local/bin") / name,
+        ]
+    for fallback in candidates:
+        if fallback.is_file():
+            return str(fallback)
     return name  # last resort: assume it is on PATH
 
 

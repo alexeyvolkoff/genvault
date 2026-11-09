@@ -17,6 +17,7 @@ import datetime
 import json
 import shutil
 import subprocess
+import sys
 import threading
 import uuid
 from collections import deque
@@ -27,7 +28,7 @@ from . import config, db, library, parser
 WATERMARK_DIR = config.LIBRARY_ROOT / ".config"
 WATERMARK = WATERMARK_DIR / "watermark.png"
 RENDER_TMP = config.LIBRARY_ROOT / ".render_tmp"
-CREATE_NO_WINDOW = 0x08000000
+CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
 _jobs: dict[str, dict] = {}
 _order: list[str] = []
@@ -37,6 +38,7 @@ _started = False
 _current_proc: subprocess.Popen | None = None
 _current_job: str | None = None
 _nvenc: bool | None = None
+_videotoolbox: bool | None = None
 
 
 # ---- probing / compatibility ---------------------------------------------------
@@ -152,6 +154,8 @@ def nvenc_available() -> bool:
     use — an encoder listed by ffmpeg can still fail at runtime (driver,
     exhausted GPU sessions/VRAM while e.g. ComfyUI is generating)."""
     global _nvenc
+    if sys.platform == "darwin":
+        return False
     if _nvenc is None:
         try:
             r = subprocess.run(
@@ -168,6 +172,37 @@ def nvenc_available() -> bool:
             _nvenc = False
         print(f"[render] NVENC available: {_nvenc}")
     return _nvenc
+
+
+def videotoolbox_available() -> bool:
+    """Runtime probe for Apple VideoToolbox hardware encoding on macOS."""
+    global _videotoolbox
+    if sys.platform != "darwin":
+        return False
+    if _videotoolbox is None:
+        try:
+            r = subprocess.run(
+                [config.FFMPEG, "-hide_banner", "-v", "error",
+                 "-f", "lavfi", "-i", "color=black:s=1280x720:r=24:d=0.3",
+                 "-c:v", "h264_videotoolbox", "-q:v", "68", "-allow_sw", "1",
+                 "-f", "null", "-"],
+                capture_output=True, timeout=30, creationflags=CREATE_NO_WINDOW)
+            _videotoolbox = r.returncode == 0
+            if not _videotoolbox:
+                print("[render] VideoToolbox probe failed: "
+                      + (r.stderr or b"").decode("utf-8", "replace")[-300:])
+        except Exception:
+            _videotoolbox = False
+        print(f"[render] VideoToolbox available: {_videotoolbox}")
+    return _videotoolbox
+
+
+def gpu_encoder() -> str | None:
+    if videotoolbox_available():
+        return "videotoolbox"
+    if nvenc_available():
+        return "nvenc"
+    return None
 
 
 # ---- watermark geometry --------------------------------------------------------
@@ -208,21 +243,30 @@ def _wm_filter(logo_label: str, base_label: str, out_label: str, geo: dict) -> s
 # produce (small files, visually clean) — the old always-crf-5 behavior made
 # outputs ~10x larger than the source and is now the opt-in "max" preset.
 QUALITY = {
-    "standard": {"x264": "20", "x265": "22", "cq": "21"},
-    "high":     {"x264": "17", "x265": "19", "cq": "17"},
-    "max":      {"x264": "5",  "x265": "8",  "cq": "10"},
+    "standard": {"x264": "20", "x265": "22", "cq": "21", "vt": "68"},
+    "high":     {"x264": "17", "x265": "19", "cq": "17", "vt": "80"},
+    "max":      {"x264": "5",  "x265": "8",  "cq": "10", "vt": "92"},
 }
 
 
-def _encoder_args(codec: str, use_nvenc: bool, quality: str) -> list[str]:
+def _encoder_args(codec: str, gpu: str | bool | None, quality: str) -> list[str]:
     q = QUALITY.get(quality) or QUALITY["standard"]
+    if gpu is True:
+        gpu = "nvenc"
     if codec == "hevc":
-        return (["-c:v", "hevc_nvenc", "-preset", "p5", "-tune", "hq",
-                 "-rc", "vbr", "-cq", q["cq"], "-b:v", "0"]
-                if use_nvenc else ["-c:v", "libx265", "-crf", q["x265"], "-preset", "medium"])
-    return (["-c:v", "h264_nvenc", "-preset", "p5", "-tune", "hq",
-             "-rc", "vbr", "-cq", q["cq"], "-b:v", "0"]
-            if use_nvenc else ["-c:v", "libx264", "-crf", q["x264"], "-preset", "medium"])
+        if gpu == "nvenc":
+            return ["-c:v", "hevc_nvenc", "-preset", "p5", "-tune", "hq",
+                    "-rc", "vbr", "-cq", q["cq"], "-b:v", "0"]
+        if gpu == "videotoolbox":
+            return ["-c:v", "hevc_videotoolbox", "-q:v", q["vt"],
+                    "-allow_sw", "1", "-tag:v", "hvc1"]
+        return ["-c:v", "libx265", "-crf", q["x265"], "-preset", "medium"]
+    if gpu == "nvenc":
+        return ["-c:v", "h264_nvenc", "-preset", "p5", "-tune", "hq",
+                "-rc", "vbr", "-cq", q["cq"], "-b:v", "0"]
+    if gpu == "videotoolbox":
+        return ["-c:v", "h264_videotoolbox", "-q:v", q["vt"], "-allow_sw", "1"]
+    return ["-c:v", "libx264", "-crf", q["x264"], "-preset", "medium"]
 
 
 def _cmd_copy_concat(paths: list[str], list_file: Path, out: Path,
@@ -322,7 +366,7 @@ def _cmd_encode(check: dict, wm: dict | None, out: Path,
         vlabel = "vout"
     cmd += ["-filter_complex", ";".join(filters), "-map", f"[{vlabel}]"]
     cmd += audio_tail
-    cmd += _encoder_args(target["codec"], nvenc_available(), quality)
+    cmd += _encoder_args(target["codec"], gpu_encoder(), quality)
     cmd += ["-pix_fmt", "yuv420p", "-map_metadata", "-1",
             "-movflags", "+faststart", str(out)]
     return cmd
@@ -509,7 +553,7 @@ def _run_ffmpeg(job: dict, cmd: list[str], total_duration: float) -> None:
 
 
 def _run_job(job: dict) -> None:
-    global _nvenc
+    global _nvenc, _videotoolbox
     check = apply_trims(check_clips(job["clips"]),
                         normalize_trims(job.get("trims"), len(job["clips"])))
     paths, total = check["_paths"], check["total_duration"]
@@ -552,19 +596,27 @@ def _run_job(job: dict) -> None:
         try:
             _run_ffmpeg(job, cmd, total)
         except RuntimeError as e:
-            if job.get("cancel") or not nvenc_available():
+            active_gpu = gpu_encoder()
+            if job.get("cancel") or not active_gpu:
                 raise
-            # NVENC accepted the probe but failed on this input (common cause:
-            # GPU sessions/VRAM exhausted while ComfyUI renders) — fall back,
+            # Hardware encoder accepted the probe but failed on this input (common
+            # cause: GPU sessions/VRAM exhausted while ComfyUI renders) — fall back,
             # and SURFACE the real error so it can be diagnosed
+            label = "VideoToolbox" if active_gpu == "videotoolbox" else "NVENC"
             reason = str(e).replace("ffmpeg failed: ", "")[:160]
-            print(f"[render] NVENC failed at runtime, CPU fallback. Cause: {e}")
-            _nvenc = False
-            job["note"] = (job["note"] or "") + f" — NVENC failed ({reason}), CPU fallback"
+            print(f"[render] {label} failed at runtime, CPU fallback. Cause: {e}")
+            if active_gpu == "videotoolbox":
+                _videotoolbox = False
+            else:
+                _nvenc = False
+            job["note"] = (job["note"] or "") + f" — {label} failed ({reason}), CPU fallback"
             job["progress"] = 0
             cmd = _cmd_encode(check, wm, out, quality, mute)
             _run_ffmpeg(job, cmd, total)
-            _nvenc = None   # re-probe next job — the GPU may just have been busy
+            if active_gpu == "videotoolbox":
+                _videotoolbox = None
+            else:
+                _nvenc = None   # re-probe next job — the GPU may just have been busy
 
     if not out.exists() or out.stat().st_size == 0:
         raise RuntimeError("render produced no output file")

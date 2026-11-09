@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import mimetypes
 import re
+import sys
 from collections import Counter
 from contextlib import asynccontextmanager
 from email.utils import formatdate
@@ -171,6 +172,7 @@ def get_config():
     return {
         "version": config.APP_VERSION,
         "port": config.PORT,
+        "platform": sys.platform,
         "platforms": config.PLATFORMS,
         "kinds": config.KINDS,
         "library_root": str(config.LIBRARY_ROOT),
@@ -491,6 +493,7 @@ def render_check(body: dict = Body(...)):
     result.pop("_paths", None)
     result.pop("_durations", None)
     result["nvenc"] = render.nvenc_available()
+    result["gpu_encoder"] = render.gpu_encoder()
     return result
 
 

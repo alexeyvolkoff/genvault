@@ -81,7 +81,7 @@ const state = {
              character: null, lora: null, upload: null, sort: "added" },
   assets: [], facets: null, counts: { inbox: 0, library: 0, trash: 0 },
   values: { projects: [], sub_projects: [], characters: [], tags: [], kinds: [] },
-  config: { version: "", platforms: [], kinds: [], library_root: "" },
+  config: { version: "", platform: "win32", platforms: [], kinds: [], library_root: "" },
   selection: new Set(),
   drawerId: null,
   focusId: null,                   // card under the mouse — target of shortcuts
@@ -579,7 +579,11 @@ async function loadWatch() {
 }
 
 async function watchAction(action, key) {
-  if (action === "import" && !confirm("Import all older files from this folder into the Inbox?\n\nThey are MOVED out of the folder (no copies). This can take a while for many files; new renders keep coming in meanwhile, and you can stop at any time.")) return;
+  const wf = (state.watch || []).find((x) => x.key === key);
+  const moveMsg = wf && wf.keep_source
+    ? "Original files stay in place in the watch folder (linked into the Inbox)."
+    : "They are MOVED out of the folder (no copies).";
+  if (action === "import" && !confirm(`Import all older files from this folder into the Inbox?\n\n${moveMsg} This can take a while for many files; new renders keep coming in meanwhile, and you can stop at any time.`)) return;
   try {
     state.watch = (await jpost(`/api/watch/${action}`, { key })).folders || [];
     if (action === "import") toast("Import started");
@@ -589,11 +593,13 @@ async function watchAction(action, key) {
 
 function renderInbox() {
   const banner = watchBannerHtml();
-  if (!state.assets.length)
+  if (!state.assets.length) {
+    const sep = state.config.platform === "win32" ? "\\" : "/";
     return `${banner}<div class="text-zinc-500 text-sm py-16 text-center">
       Inbox is empty. Drag&nbsp;&amp;&nbsp;drop files into this window<br>
-      or put them into the drop folder: <code class="text-zinc-400">${esc(state.config.library_root)}\\drop</code>
+      or put them into the drop folder: <code class="text-zinc-400">${esc(state.config.library_root)}${sep}drop</code>
       ${(state.watch || []).length ? `<br>or render into a watch folder: ${state.watch.map((w) => `<code class="text-zinc-400">${esc(w.path)}</code>`).join(", ")}` : ""}</div>`;
+  }
   const counts = { video: 0, image: 0, audio: 0 };
   state.assets.forEach((a) => { counts[a.media_type] = (counts[a.media_type] || 0) + 1; });
   const chips = [[null, `All (${state.assets.length})`], ["video", `Videos (${counts.video})`],
@@ -937,7 +943,7 @@ function releaseCompatNote() {
     if (!r.wm.enabled && !anyTrim && match)
       compatNote = `<div class="text-xs text-emerald-400 mt-2">⚡ Lossless stream copy possible — all clips share codec/resolution/fps.${muteTxt}</div>`;
     else
-      compatNote = `<div class="text-xs text-amber-400 mt-2">Re-encode required (${!match ? "clips differ in codec/resolution/fps; " : ""}${r.wm.enabled ? "watermark overlay; " : ""}${anyTrim ? "trimmed — cuts are frame-accurate; " : ""}target ${chk.target.width}×${chk.target.height} @ ${chk.target.fps} fps, ${chk.nvenc ? "GPU NVENC" : "CPU x264/x265"}).${muteTxt}</div>`;
+      compatNote = `<div class="text-xs text-amber-400 mt-2">Re-encode required (${!match ? "clips differ in codec/resolution/fps; " : ""}${r.wm.enabled ? "watermark overlay; " : ""}${anyTrim ? "trimmed — cuts are frame-accurate; " : ""}target ${chk.target.width}×${chk.target.height} @ ${chk.target.fps} fps, ${chk.gpu_encoder === "videotoolbox" ? "GPU VideoToolbox" : chk.nvenc ? "GPU NVENC" : "CPU x264/x265"}).${muteTxt}</div>`;
   } else if (chk && !chk.error && (!multi || r.mode === "each")) {
     if (!r.wm.enabled && !anyTrim && mute)
       compatNote = `<div class="text-xs text-emerald-400 mt-2">⚡ The video is copied losslessly — only the audio is replaced by silence.</div>`;
@@ -1021,7 +1027,7 @@ function renderRelease() {
           <option value="release" ${o.kind === "release" ? "selected" : ""}>release</option>
           <option value="pre-release" ${o.kind === "pre-release" ? "selected" : ""}>pre-release</option>
         </select></div>`
-    : `<input data-out="folder" value="${esc(o.folder)}" placeholder="e.g. D:\\exports" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-sm text-zinc-100 w-96">`;
+    : `<input data-out="folder" value="${esc(o.folder)}" placeholder="${state.config.platform === "win32" ? "e.g. D:\\exports" : "e.g. ~/Exports"}" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-sm text-zinc-100 w-96">`;
 
   return `<div class="max-w-3xl mx-auto space-y-4">
     <div class="bg-zinc-950/60 rounded-xl p-4">
@@ -1408,7 +1414,7 @@ function renderDrawer() {
     </div>
 
     <div class="text-xs text-zinc-500">
-      Path (click to open in Explorer):<br>
+      Path (click to ${state.config.platform === "darwin" ? "reveal in Finder" : state.config.platform === "win32" ? "open in Explorer" : "open folder"}):<br>
       <button data-action="open-folder" data-id="${a.id}" class="text-left text-indigo-400 hover:text-indigo-300 hover:underline break-all">${esc(a.abs_path || "")}</button>
     </div>
 

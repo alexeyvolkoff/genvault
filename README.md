@@ -4,10 +4,10 @@ A local catalog for your AI-generated videos, images and sounds — built for
 people who produce a lot of ComfyUI / A1111 / Suno output and want to keep it
 organized without handing it to a cloud service.
 
-genvault runs a small web app on your own PC (`127.0.0.1`). Your media files
-stay on your disk and are never uploaded anywhere.
+genvault runs a small web app on your own computer (`127.0.0.1`). Your media
+files stay on your disk and are never uploaded anywhere.
 
-**Platform:** Windows 10/11.
+**Platforms:** Windows 10/11, macOS (Apple Silicon & Intel), Linux.
 
 ---
 
@@ -47,8 +47,9 @@ stay on your disk and are never uploaded anywhere.
 - **Release module** — select clips, trim seconds off their start or end,
   add a PNG watermark (9 positions, size, opacity, margins, preview frame),
   join several clips into one video, optionally replace the audio with silence,
-  and render in the background. GPU (NVENC) encoding with automatic CPU
-  fallback. Embedded prompts/workflows are stripped from rendered files.
+  and render in the background. GPU (NVIDIA NVENC / Apple VideoToolbox) encoding
+  with automatic CPU fallback. Embedded prompts/workflows are stripped from
+  rendered files.
 - **Privacy blur** — one click blurs every preview, e.g. while screen sharing.
 - **Safe by design** — deleting moves files to a Trash you can restore from;
   the database can be rebuilt at any time from per-file JSON sidecars; one-click
@@ -59,11 +60,13 @@ stay on your disk and are never uploaded anywhere.
 ## Requirements
 
 1. **Python 3.10 or newer** — <https://www.python.org/downloads/>
-   During installation, tick **"Add python.exe to PATH"**.
+   - **Windows:** during installation, tick **"Add python.exe to PATH"**.
+   - **macOS:** `brew install python@3.12` (or the installer from python.org).
+   - **Linux:** `python3` + `python3-venv` from your distro's package manager.
 2. **ffmpeg** (for thumbnails, video metadata and the release module)
-   - Download `ffmpeg-release-essentials.zip` from <https://www.gyan.dev/ffmpeg/builds/>
-   - Unzip it and copy `ffmpeg.exe` and `ffprobe.exe` into `C:\ffmpeg\bin`
-     (or put them anywhere on your `PATH`).
+   - **Windows:** download `ffmpeg-release-essentials.zip` from <https://www.gyan.dev/ffmpeg/builds/>, unzip it and copy `ffmpeg.exe` and `ffprobe.exe` into `C:\ffmpeg\bin` (or anywhere on your `PATH`).
+   - **macOS:** `brew install ffmpeg` (detected automatically in `/opt/homebrew/bin` and `/usr/local/bin`).
+   - **Linux:** e.g. `sudo apt install ffmpeg`.
 3. An internet connection when opening the app: the page styling (Tailwind
    CSS) is loaded from a CDN. Your media is never sent anywhere.
 
@@ -72,19 +75,27 @@ stay on your disk and are never uploaded anywhere.
 ## Installation
 
 1. Unzip the download and move the `genvault` folder to where it should live
-   permanently (e.g. `D:\genvault`).
-2. Double-click **`setup.bat`**. It will
+   permanently (e.g. `D:\genvault` or `~/Apps/genvault`).
+2. Run setup:
+   - **Windows:** double-click **`setup.bat`**.
+   - **macOS:** double-click **`setup.command`** in Finder (if macOS Gatekeeper blocks an unsigned download, right-click → **Open**, or run `xattr -dr com.apple.quarantine .` inside the folder).
+   - **Linux:** run `./setup.command` in a terminal.
+
+   Setup will:
    - create a private Python environment in `.venv` (takes 1–2 minutes),
    - ask **where your library should live** — all imported media goes there,
-     so pick a drive with enough space (press Enter for `%USERPROFILE%\genvault`),
+     so pick a drive with enough space (press Enter for `~/genvault` / `%USERPROFILE%\genvault`),
    - ask for the port (press Enter for `8077`).
 
 ## Starting and stopping
 
-- Start: double-click **`genvault-tray.bat`**. A tray icon appears
-  (gray = starting, green = running). Right-click it → **Open genvault**, or open
-  <http://127.0.0.1:8077> in your browser.
-- Stop: right-click the tray icon → **Quit**.
+- **Start:**
+  - **Windows:** double-click **`genvault-tray.bat`**.
+  - **macOS / Linux (desktop):** double-click **`genvault-tray.command`** (or run `./genvault-tray.command`).
+  - **Headless / terminal:** `.venv/bin/python serve.py` (Windows: `.venv\Scripts\python.exe serve.py`).
+- A menu-bar / system-tray icon appears (gray = starting, green = running).
+  Click / right-click it → **Open genvault**, or open <http://127.0.0.1:8077> in your browser.
+- **Stop:** tray / menu-bar icon → **Quit** (or `Ctrl+C` if running `serve.py`).
 
 ---
 
@@ -113,7 +124,7 @@ stay on your disk and are never uploaded anywhere.
    videos-only.
 5. **Details** — rate, favorite, edit metadata, copy the prompt, change the
    assignment (the file is moved on disk), track uploads. Click the file path
-   to open it in Explorer.
+   to reveal it in Explorer / Finder / your file manager.
 6. **Move many files** — tick cards in the Library (Shift+click selects a
    range) and either **drag them onto a project or sub-project in the left
    sidebar**, or fill in only the fields you want to change in the bottom bar
@@ -151,10 +162,11 @@ screen).
 
 ## Updating
 
-1. Quit genvault (tray icon → Quit).
-2. Drag the new genvault zip onto **`update.bat`** (or double-click it — it
-   picks the newest `genvault*.zip` from your Downloads folder).
-3. Start `genvault-tray.bat` again. The version is shown next to the logo.
+1. Quit genvault (tray / menu-bar icon → Quit).
+2. Run the updater (it automatically picks the newest `genvault*.zip` from your `Downloads` folder, or you can pass/drag a zip onto it):
+   - **Windows:** drag the zip onto **`update.bat`** or double-click it.
+   - **macOS / Linux:** double-click **`update.command`** (or run `./update.command`).
+3. Start `genvault-tray.bat` / `genvault-tray.command` again. The version is shown next to the logo.
 
 Updates replace program files only. Your `config.json`, library and database
 are never touched; database changes migrate automatically on start.
