@@ -32,7 +32,7 @@ from watchdog.observers import Observer
 from . import config, library
 
 SCAN_INTERVAL = 4.0          # fallback scan cadence in seconds
-IGNORE_SUFFIXES = (".part", ".crdownload", ".tmp", ".partial")
+IGNORE_SUFFIXES = (".part", ".crdownload", ".tmp", ".partial", ".cover.jpg", ".cover.png", ".cover.webp")
 COMPANION_GRACE = 15.0       # a PNG waits this long for its video to appear
 STABLE_AGE = 3.0             # a file must keep its size this long before it is moved
 RECENT_VIDEO_TTL = 600.0     # remember imported videos this long (late companion PNGs)
